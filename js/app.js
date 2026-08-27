@@ -1045,19 +1045,24 @@ function renderTabelaClientes(){
   const slice=dados.slice((st.page-1)*st.perPage,st.page*st.perPage);
   const tbody=document.getElementById('tbody-clientes');
   tbody.innerHTML=slice.length?slice.map(c=>{
-    const qtd=locais.filter(l=>l.id_cliente===c.id).length;
+    const locaisCliente=locais.filter(l=>l.id_cliente===c.id);
+    const qtd=locaisCliente.length;
+    // Soma os equipamentos instalados em todos os locais do cliente
+    const idsLocais=locaisCliente.map(l=>l.id);
+    const qtdEquip=instalacoes.filter(i=>idsLocais.includes(i.id_local)).length;
     const ativo=c.ativo===true;
     return `<tr>
       <td><strong>${c.nome}</strong></td><td>${c.contato||'–'}</td>
       <td>${c.email?`<a href="mailto:${c.email}">${c.email}</a>`:'–'}</td>
       <td>${c.telefone||'–'}</td>
       <td><span class="badge badge-${ativo?'ativo':'inativo'}">${qtd} local${qtd!==1?'is':''}</span></td>
+      <td><span class="badge badge-${qtdEquip>0?'ativo':'inativo'}">${qtdEquip} equip.</span></td>
       <td>${badge(ativo?'ativo':'inativo')}</td>
       <td><div class="action-btns">
         <button class="btn btn-sm btn-primary btn-icon" onclick="editarCliente('${c.id}')"><i class="fa-solid fa-pen"></i></button>
         <button class="btn btn-sm btn-danger btn-icon" onclick="excluirCliente('${c.id}')"><i class="fa-solid fa-trash"></i></button>
       </div></td></tr>`;
-  }).join(''):`<tr><td colspan="7"><p class="empty-state"><i class="fa-solid fa-building"></i>Nenhum cliente.</p></td></tr>`;
+  }).join(''):`<tr><td colspan="8"><p class="empty-state"><i class="fa-solid fa-building"></i>Nenhum cliente.</p></td></tr>`;
   renderPagination('pagination-clientes',totalPag,st.page,pg=>{st.page=pg;renderTabelaClientes();});
 }
 
