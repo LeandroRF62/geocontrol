@@ -748,6 +748,7 @@
       <div id="modal-kpi-body"></div>
     </div>
     <div class="modal-footer">
+      <button class="btn btn-primary" onclick="exportarKpiJPEG()"><i class="fa-solid fa-image"></i> Gerar JPEG</button>
       <button class="btn btn-secondary" onclick="fecharModal('modal-kpi')">Fechar</button>
     </div>
   </div>
@@ -775,6 +776,7 @@
 <div id="toast" class="toast hidden"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="js/db.js"></script>
   <script src="js/app.js"></script>
 </body>
