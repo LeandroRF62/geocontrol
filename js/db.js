@@ -160,12 +160,26 @@ const db = {
     await _sb.from('equipamentos').delete().neq('id', 'noop');
     await _sb.from('clientes').delete().neq('id', 'noop');
 
-    if (cls?.length)  await _sb.from('clientes').insert(cls);
-    if (eqs?.length)  await _sb.from('equipamentos').insert(eqs.map(e => ({ id: e.id, serial: e.serial, tipo: e.tipo, modelo: e.modelo, observacoes: e.observacoes || '' })));
-    if (pls?.length)  await _sb.from('planos').insert(pls);
-    if (lcs?.length)  await _sb.from('locais').insert(lcs);
-    if (ins?.length)  await _sb.from('instalacoes').insert(ins);
-    if (evs?.length)  await _sb.from('eventos').insert(evs);
+    // Insere em ordem de dependência e reporta erro por tabela.
+    // Sem isto, um erro (ex.: coluna inexistente) passaria despercebido
+    // e a tabela ficaria vazia sem nenhum aviso.
+    const passos = [
+      ['clientes',     cls],
+      ['equipamentos', eqs?.map(e => ({ id: e.id, serial: e.serial, tipo: e.tipo, modelo: e.modelo, observacoes: e.observacoes || '' }))],
+      ['planos',       pls],
+      ['locais',       lcs],
+      ['instalacoes',  ins],
+      ['eventos',      evs],
+    ];
+
+    for (const [tabela, registros] of passos) {
+      if (!registros?.length) continue;
+      const { error } = await _sb.from(tabela).insert(registros);
+      if (error) {
+        throw new Error(`Falha ao importar "${tabela}" (${registros.length} registros): ${error.message}`);
+      }
+      console.log(`[GeoControl] ${tabela}: ${registros.length} registros importados`);
+    }
   },
 
   async limparTudo() {
