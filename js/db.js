@@ -79,7 +79,9 @@ const _FKS = ['id_cliente', 'id_local', 'id_plano', 'id_instalacao'];
 function _normalizarFks(registro) {
   const out = { ...registro };
   for (const fk of _FKS) {
-    if (out[fk] === '' || out[fk] === undefined) out[fk] = null;
+    // Só mexe em chaves que o registro já possui — adicionar uma coluna
+    // que a tabela não tem faz o Supabase recusar o INSERT.
+    if (fk in out && out[fk] === '') out[fk] = null;
   }
   return out;
 }
@@ -166,16 +168,9 @@ const db = {
     _checkDb();
 
     // O app usa '' para "sem vínculo", mas no Postgres uma chave estrangeira
-    // só aceita null. Sem esta conversão o INSERT é rejeitado com
-    // "violates foreign key constraint".
-    const FKS = ['id_cliente', 'id_local', 'id_plano', 'id_instalacao'];
-    const limpar = (registros) => (registros || []).map(r => {
-      const out = { ...r };
-      for (const fk of FKS) {
-        if (out[fk] === '' || out[fk] === undefined) out[fk] = null;
-      }
-      return out;
-    });
+    // só aceita null. Reaproveita o normalizador global, que mexe apenas
+    // nas chaves presentes no registro.
+    const limpar = (registros) => (registros || []).map(_normalizarFks);
 
     // Apaga tudo antes de reimportar
     await _sb.from('eventos').delete().neq('id', 'noop');
