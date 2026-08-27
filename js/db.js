@@ -11,7 +11,34 @@
 const SUPABASE_URL = '__SUPABASE_URL__';
 const SUPABASE_KEY = '__SUPABASE_ANON_KEY__';
 
-const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// Inicialização defensiva: falha com mensagem clara em vez de quebrar o app
+let _sb = null;
+let _dbErro = null;
+
+(function initSupabase(){
+  if (typeof supabase === 'undefined' || !supabase.createClient) {
+    _dbErro = 'A biblioteca do Supabase não carregou. Verifique sua conexão com a internet.';
+    console.error('[GeoControl]', _dbErro);
+    return;
+  }
+  if (SUPABASE_URL.includes('__') || SUPABASE_KEY.includes('__')) {
+    _dbErro = 'Credenciais do Supabase não foram configuradas. Verifique os Secrets do GitHub (SUPABASE_URL e SUPABASE_ANON_KEY) e rode o workflow novamente.';
+    console.error('[GeoControl]', _dbErro);
+    return;
+  }
+  try {
+    _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    console.log('[GeoControl] Supabase conectado:', SUPABASE_URL);
+  } catch (e) {
+    _dbErro = 'Erro ao inicializar o Supabase: ' + e.message;
+    console.error('[GeoControl]', _dbErro);
+  }
+})();
+
+function _checkDb(){
+  if (_dbErro) throw new Error(_dbErro);
+  if (!_sb) throw new Error('Supabase não inicializado.');
+}
 
 // ── Estado em memória (espelho dos dados) ────────────────────
 // As variáveis globais do app.js continuam existindo.
@@ -19,14 +46,8 @@ const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ── CARREGAR todos os dados ───────────────────────────────────
 async function dbCarregar() {
-  const [
-    { data: cls },
-    { data: eqs },
-    { data: pls },
-    { data: lcs },
-    { data: ins },
-    { data: evs },
-  ] = await Promise.all([
+  _checkDb();
+  const res = await Promise.all([
     _sb.from('clientes').select('*').order('nome'),
     _sb.from('equipamentos').select('*').order('serial'),
     _sb.from('planos').select('*').order('codigo_plano'),
@@ -34,6 +55,13 @@ async function dbCarregar() {
     _sb.from('instalacoes').select('*'),
     _sb.from('eventos').select('*').order('data_evento', { ascending: false }),
   ]);
+
+  // Se alguma consulta falhou, mostra o erro real (ex.: tabela não existe, RLS bloqueando)
+  const falha = res.find(r => r.error);
+  if (falha) throw new Error(falha.error.message);
+
+  const [{ data: cls }, { data: eqs }, { data: pls },
+         { data: lcs }, { data: ins }, { data: evs }] = res;
 
   // Mapeia de volta para os nomes que o app usa
   clientes      = cls || [];
@@ -46,18 +74,21 @@ async function dbCarregar() {
 
 // ── UPSERT genérico ──────────────────────────────────────────
 async function dbUpsert(tabela, registro) {
+  _checkDb();
   const { error } = await _sb.from(tabela).upsert(registro, { onConflict: 'id' });
   if (error) { showToast(`Erro ao salvar: ${error.message}`, 'error'); throw error; }
 }
 
 // ── DELETE genérico ──────────────────────────────────────────
 async function dbDelete(tabela, id) {
+  _checkDb();
   const { error } = await _sb.from(tabela).delete().eq('id', id);
   if (error) { showToast(`Erro ao excluir: ${error.message}`, 'error'); throw error; }
 }
 
 // ── DELETE por campo ─────────────────────────────────────────
 async function dbDeleteWhere(tabela, campo, valor) {
+  _checkDb();
   const { error } = await _sb.from(tabela).delete().eq(campo, valor);
   if (error) { showToast(`Erro ao excluir: ${error.message}`, 'error'); throw error; }
 }
@@ -120,6 +151,7 @@ const db = {
 
   // BATCH (para importarJSON)
   async importarTudo({ clientes: cls, equipCadastro: eqs, planos: pls, locais: lcs, instalacoes: ins, eventos: evs }) {
+    _checkDb();
     // Apaga tudo antes de reimportar
     await _sb.from('eventos').delete().neq('id', 'noop');
     await _sb.from('instalacoes').delete().neq('id', 'noop');
@@ -137,6 +169,7 @@ const db = {
   },
 
   async limparTudo() {
+    _checkDb();
     await _sb.from('eventos').delete().neq('id', 'noop');
     await _sb.from('instalacoes').delete().neq('id', 'noop');
     await _sb.from('locais').delete().neq('id', 'noop');
@@ -145,3 +178,11 @@ const db = {
     await _sb.from('clientes').delete().neq('id', 'noop');
   },
 };
+
+// ── Exporta explicitamente no escopo global ──────────────────
+// `const` no topo de um script não vira propriedade de window,
+// então declaramos aqui para garantir que app.js enxergue tudo.
+window.db          = db;
+window.dbCarregar  = dbCarregar;
+window.dbUpsert    = dbUpsert;
+window.dbDelete    = dbDelete;
