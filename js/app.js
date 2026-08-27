@@ -300,6 +300,7 @@ function abrirModalKpi(tipo) {
     clientes:  { title: 'Clientes Ativos',            icon: 'fa-building',             cor: '#0f766e' },
   };
   const cfg = configs[tipo];
+  window._kpiAtual = { tipo, titulo: cfg.title };
   document.getElementById('modal-kpi-title').innerHTML =
     `<i class="fa-solid ${cfg.icon}" style="color:${cfg.cor};margin-right:8px"></i>${cfg.title}`;
 
@@ -2049,6 +2050,67 @@ function desenharLosango(ctx, x, y, r, fill, stroke) {
   ctx.strokeStyle = stroke;
   ctx.lineWidth = 0.8;
   ctx.stroke();
+}
+
+// ─── EXPORTAR MODAL KPI COMO JPEG ────────────────────────────
+async function exportarKpiJPEG() {
+  const body = document.getElementById('modal-kpi-body');
+  if (!body) return;
+
+  if (typeof html2canvas === 'undefined') {
+    return showToast('Biblioteca de imagem não carregou. Recarregue a página.', 'error');
+  }
+
+  const info = window._kpiAtual || { tipo: 'kpi', titulo: 'Resumo' };
+
+  // Monta um container temporário fora da tela, com título e data.
+  // Capturar o modal direto cortaria linhas na rolagem e traria o overlay escuro.
+  const wrap = document.createElement('div');
+  wrap.style.cssText = `position:fixed;left:-99999px;top:0;background:#fff;padding:28px 32px;
+    width:${Math.max(body.scrollWidth + 64, 900)}px;font-family:Inter,sans-serif;`;
+
+  const cab = document.createElement('div');
+  cab.style.cssText = 'margin-bottom:18px;border-bottom:2px solid #e2e8f0;padding-bottom:14px';
+  cab.innerHTML = `
+    <div style="font-size:20px;font-weight:700;color:#1e293b">${info.titulo}</div>
+    <div style="font-size:13px;color:#64748b;margin-top:4px">
+      Controle das Anuidades · MecRoc — ${new Date().toLocaleDateString('pt-BR',
+        { day:'2-digit', month:'long', year:'numeric' })}
+    </div>`;
+
+  const conteudo = body.cloneNode(true);
+  // Remove limites de altura do clone para a tabela sair inteira
+  conteudo.style.maxHeight = 'none';
+  conteudo.style.overflow  = 'visible';
+  conteudo.querySelectorAll('*').forEach(el => {
+    el.style.maxHeight = 'none';
+    el.style.overflow  = 'visible';
+  });
+
+  wrap.appendChild(cab);
+  wrap.appendChild(conteudo);
+  document.body.appendChild(wrap);
+
+  try {
+    showToast('Gerando imagem...', 'warning');
+    const canvas = await html2canvas(wrap, {
+      backgroundColor: '#ffffff',
+      scale: 2,              // 2x para ficar nítido
+      logging: false,
+      useCORS: true,
+    });
+
+    const link = document.createElement('a');
+    link.download = `${info.tipo}_${hoje()}.jpg`;
+    link.href = canvas.toDataURL('image/jpeg', 0.92);
+    link.click();
+    showToast('Imagem gerada!');
+  } catch (e) {
+    console.error('[GeoControl] Erro ao gerar JPEG:', e);
+    showToast('Erro ao gerar imagem: ' + e.message, 'error');
+  } finally {
+    wrap.remove();
+  }
 }
 
 function exportarGanttPNG() {
