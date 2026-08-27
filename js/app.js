@@ -1,7 +1,7 @@
 /* ============================================================
    GeoControl – Controle de Anuidades
    Estrutura: Local → N Equipamentos (cada um com sua anuidade)
-   Persistência: localStorage + Export/Import JSON
+   Persistência: Supabase (nuvem) + Export/Import JSON
 ============================================================ */
 'use strict';
 
@@ -1531,7 +1531,7 @@ function abrirModalEvento(){
   popularSelectLocaisEvento('evento-local');
   abrirModal('modal-evento');
 }
-function salvarEvento(){
+async function salvarEvento(){
   const idLocal=document.getElementById('evento-local').value;
   const tipo=document.getElementById('evento-tipo').value;
   const data=document.getElementById('evento-data').value;
@@ -1542,8 +1542,10 @@ function salvarEvento(){
   showToast('Evento registrado!');fecharModal('modal-evento');renderTabelaEventos();
 }
 
-function registrarEvento(dados){
-  eventos.push({id:gerarId(),serial_anterior:'',serial_novo:'',...dados});
+async function registrarEvento(dados){
+  const ev={id:gerarId(),serial_anterior:'',serial_novo:'',...dados};
+  eventos.push(ev);
+  await db.salvarEvento(ev);
 }
 
 // ─── SELECT HELPERS ──────────────────────────────────────────
@@ -2066,30 +2068,45 @@ function exportarGanttPNG() {
 // ─── INIT ─────────────────────────────────────────────────────
 updateDate();
 
+function mostrarErroFatal(msg){
+  const div = document.createElement('div');
+  div.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fff;padding:14px 20px;font-family:Inter,sans-serif;font-size:14px;line-height:1.5;box-shadow:0 2px 12px rgba(0,0,0,.3)';
+  div.innerHTML = `<strong>⚠️ Erro de conexão com o banco de dados</strong><br>${msg}
+    <br><small style="opacity:.85">Abra o Console do navegador (F12) para mais detalhes.</small>`;
+  document.body.appendChild(div);
+}
+
 async function iniciarApp(){
-  showToast('Conectando ao banco de dados...', 'warning');
   try {
+    showToast('Conectando ao banco de dados...', 'warning');
     await dbCarregar();
-    // Se não há dados, carrega exemplos
+
+    // Banco vazio → carrega dados de exemplo
     if(!clientes.length && !locais.length){
       await db.importarTudo({
-        clientes:     DADOS_EXEMPLO.clientes,
+        clientes:      DADOS_EXEMPLO.clientes,
         equipCadastro: DADOS_EXEMPLO.equipamentos_cadastro,
-        planos:       DADOS_EXEMPLO.planos_aws,
-        locais:       DADOS_EXEMPLO.locais,
-        instalacoes:  DADOS_EXEMPLO.instalacoes,
-        eventos:      DADOS_EXEMPLO.eventos,
+        planos:        DADOS_EXEMPLO.planos_aws,
+        locais:        DADOS_EXEMPLO.locais,
+        instalacoes:   DADOS_EXEMPLO.instalacoes,
+        eventos:       DADOS_EXEMPLO.eventos,
       });
       await dbCarregar();
-      showToast('Dados de exemplo carregados!');
+      showToast('Dados de exemplo carregados. Use "Importar" para carregar seu backup.');
     } else {
       showToast('Dados carregados!');
     }
   } catch(e) {
-    showToast('Erro ao conectar ao banco. Verifique as credenciais do Supabase.', 'error');
-    console.error(e);
+    console.error('[GeoControl] Falha na inicialização:', e);
+    mostrarErroFatal(e.message || 'Erro desconhecido.');
+    showToast('Erro ao conectar ao banco.', 'error');
   }
   loadPage('dashboard');
 }
 
-iniciarApp();
+// Só inicia depois que o DOM estiver pronto
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', iniciarApp);
+} else {
+  iniciarApp();
+}
