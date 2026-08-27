@@ -1,0 +1,2095 @@
+/* ============================================================
+   GeoControl – Controle de Anuidades
+   Estrutura: Local → N Equipamentos (cada um com sua anuidade)
+   Persistência: localStorage + Export/Import JSON
+============================================================ */
+'use strict';
+
+// ─── DADOS DE EXEMPLO ────────────────────────────────────────
+const DADOS_EXEMPLO = {
+  clientes: [
+    { id: 'c1', nome: 'Vale_EFVM', contato: 'Carlos Mendes', email: 'carlos@vale.com', telefone: '(31) 98800-1000', ativo: true, observacoes: '' },
+    { id: 'c2', nome: 'CSN', contato: 'Ana Paula Faria', email: 'ana@csn.com.br', telefone: '(24) 99900-2200', ativo: true, observacoes: '' },
+  ],
+  equipamentos_cadastro: [
+    { id: 'eq1', serial: 'EWS836', tipo: 'Tiltímetro', modelo: 'Verde', observacoes: '' },
+    { id: 'eq2', serial: 'EWS870', tipo: 'Tiltímetro', modelo: 'Azul',  observacoes: '' },
+    { id: 'eq3', serial: 'EWS900', tipo: 'Datalogger', modelo: 'DL-200',observacoes: '' },
+  ],
+  planos_aws: [
+    { id: 'p1', codigo_plano: 'A22',  tipo_plano: 'Iridium Basic',  custo_mensal: 320.00, status: 'ativo',   serial_atual: 'EWS836', data_ativacao: '2026-01-01', data_vencimento_ews: '2027-01-01', valor_anuidade_ews: 3840, observacoes: '' },
+    { id: 'p2', codigo_plano: 'A23',  tipo_plano: 'Iridium Plus',   custo_mensal: 480.00, status: 'ativo',   serial_atual: 'EWS870', data_ativacao: '2026-01-01', data_vencimento_ews: '2026-09-22', valor_anuidade_ews: 5760, observacoes: '' },
+    { id: 'p3', codigo_plano: 'A24',  tipo_plano: 'Iridium Basic',  custo_mensal: 320.00, status: 'inativo', serial_atual: '',       data_ativacao: null,         data_vencimento_ews: null,         valor_anuidade_ews: 0,    observacoes: 'Aguardando instalação' },
+  ],
+  locais: [
+    { id: 'l1', nome: 'KM36+300', id_cliente: 'c1', localizacao: 'Ferrovia Vitória a Minas', geotecnico: 'Pedro Nunes', observacoes: '' },
+    { id: 'l2', nome: 'Talude Norte', id_cliente: 'c2', localizacao: 'Volta Redonda – RJ', geotecnico: 'Maria Costa', observacoes: '' },
+  ],
+  // Equipamentos instalados em locais (com anuidade própria)
+  instalacoes: [
+    { id: 'i1', id_local: 'l1', serial: 'EWS836', id_plano: 'p1', status: 'ativo', valor_anuidade: 3310, data_inicio: '2026-01-01', data_vencimento: '2027-01-01', observacoes: '' },
+    { id: 'i2', id_local: 'l1', serial: 'EWS870', id_plano: 'p2', status: 'ativo', valor_anuidade: 4200, data_inicio: '2026-01-01', data_vencimento: '2026-09-22', observacoes: '' },
+    { id: 'i3', id_local: 'l2', serial: 'EWS900', id_plano: 'p3', status: 'suspenso', valor_anuidade: 3000, data_inicio: '2025-06-01', data_vencimento: '2026-06-01', observacoes: '' },
+  ],
+  eventos: [
+    { id: 'ev1', id_local: 'l1', id_instalacao: 'i1', tipo_evento: 'instalacao', descricao: 'Instalação inicial EWS836.', serial: 'EWS836', data_evento: '2026-01-01', responsavel: 'João Silva' },
+    { id: 'ev2', id_local: 'l1', id_instalacao: 'i2', tipo_evento: 'instalacao', descricao: 'Instalação inicial EWS870.', serial: 'EWS870', data_evento: '2026-01-01', responsavel: 'João Silva' },
+  ]
+};
+
+// ─── PERSISTÊNCIA (Supabase via db.js) ───────────────────────
+// Substituído por chamadas assíncronas ao Supabase.
+// db.js expõe: db.salvarCliente, db.salvarLocal, db.salvarInstalacao etc.
+
+function gerarId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+}
+
+// ─── EXPORT / IMPORT / LIMPAR ────────────────────────────────
+function exportarJSON() {
+  const blob = new Blob([JSON.stringify({ clientes, equipCadastro, planos, locais, instalacoes, eventos, _versao:'2.0', _exportado_em: new Date().toISOString() }, null, 2)], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `geocontrol_${hoje()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast('Arquivo exportado!');
+}
+
+function importarJSON() {
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.json';
+  input.onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      const d = JSON.parse(await file.text());
+      if (!d.locais && !d.clientes) throw new Error('inválido');
+      if (!confirm(`Importar "${file.name}"?\nOs dados atuais serão substituídos.`)) return;
+      showToast('Importando...', 'warning');
+      await db.importarTudo(d);
+      await dbCarregar();
+      loadPage(paginaAtiva);
+      showToast('Dados importados!');
+    } catch(err) { showToast('Erro na importação: ' + (err.message||'arquivo inválido'), 'error'); }
+  };
+  input.click();
+}
+
+async function limparDados() {
+  if (!confirm('Apagar TODOS os dados?\nEsta ação não pode ser desfeita.')) return;
+  showToast('Apagando...', 'warning');
+  await db.limparTudo();
+  clientes=[]; equipCadastro=[]; planos=[]; locais=[]; instalacoes=[]; eventos=[];
+  loadPage(paginaAtiva);
+  showToast('Dados apagados.', 'warning');
+}
+
+// ─── GLOBALS ─────────────────────────────────────────────────
+let clientes      = [];
+let equipCadastro = []; // catálogo de equipamentos (serial, tipo, modelo)
+let planos        = [];
+let locais        = [];
+let instalacoes   = []; // equipamentos instalados em locais (com anuidade)
+let eventos       = [];
+
+let chartStatusInst = null;
+let chartLocaisCliente = null;
+let chartLocaisPorCliente = null;
+let paginaAtiva = 'dashboard';
+let locaisExpandidos = new Set();
+
+const pageState = {
+  locais:       { search:'', filterStatus:'', filterGeotecnico:'', filterEquipamento:'', page:1, perPage:15 },
+  clientes:     { search:'', page:1, perPage:15 },
+  equipamentos: { search:'', page:1, perPage:15 },
+  planos:       { search:'', filter:'', page:1, perPage:15 },
+  eventos:      { search:'', filter:'', page:1, perPage:20 },
+};
+
+// ─── NAVIGATION ──────────────────────────────────────────────
+const pageTitles = {
+  dashboard:'Dashboard', locais:'Locais de Monitoramento',
+  clientes:'Clientes', equipamentos:'Equipamentos',
+  planos:'Planos EWS Monitoring', gantt:'Gráfico Gantt', eventos:'Histórico de Eventos',
+};
+
+function navTo(page) {
+  paginaAtiva = page;
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById(`page-${page}`)?.classList.add('active');
+  document.querySelector(`.nav-item[data-page="${page}"]`)?.classList.add('active');
+  // título fixo — não altera ao trocar de aba
+  closeSidebar(); loadPage(page);
+}
+
+function loadPage(page) {
+  switch(page) {
+    case 'dashboard':    loadDashboard();           break;
+    case 'locais':       renderTabelaLocais();       break;
+    case 'clientes':     renderTabelaClientes();     break;
+    case 'equipamentos': renderTabelaEquipamentos(); break;
+    case 'planos':       renderTabelaPlanos();       break;
+    case 'gantt':        initFiltrosGantt();         break;
+    case 'eventos':      renderTabelaEventos();      break;
+  }
+}
+
+document.getElementById('sidebar-toggle').addEventListener('click', ()=>document.getElementById('sidebar').classList.toggle('open'));
+function closeSidebar(){ document.getElementById('sidebar').classList.remove('open'); }
+document.querySelectorAll('.nav-item').forEach(item=>{
+  item.addEventListener('click', e=>{ e.preventDefault(); navTo(item.dataset.page); });
+});
+
+// ─── UTILS ───────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, type='success') {
+  const t=document.getElementById('toast'); t.textContent='';
+  const i=document.createElement('i');
+  i.className=type==='success'?'fa-solid fa-circle-check':type==='error'?'fa-solid fa-circle-xmark':'fa-solid fa-triangle-exclamation';
+  t.appendChild(i); t.appendChild(document.createTextNode(' '+msg));
+  t.className=`toast ${type}`; clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{ t.className='toast hidden'; },3500);
+}
+
+function fecharModal(id){ document.getElementById(id).classList.add('hidden'); }
+function abrirModal(id) { document.getElementById(id).classList.remove('hidden'); }
+document.querySelectorAll('.modal-overlay').forEach(o=>{
+  o.addEventListener('click', e=>{ if(e.target===o) o.classList.add('hidden'); });
+});
+
+function updateDate(){
+  document.getElementById('topbar-date').textContent =
+    new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
+}
+function hoje(){ return new Date().toISOString().slice(0,10); }
+function fmtData(v){
+  if(!v) return '–';
+  const [y,m,d]=v.slice(0,10).split('-');
+  return `${d}/${m}/${y}`;
+}
+function fmtMoeda(v){
+  if(!v&&v!==0) return '–';
+  return Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+}
+function diasParaVencer(dataStr){
+  if(!dataStr) return null;
+  const hoje_=new Date(); hoje_.setHours(0,0,0,0);
+  const [y,m,d]=dataStr.slice(0,10).split('-').map(Number);
+  return Math.ceil((new Date(y,m-1,d)-hoje_)/86400000);
+}
+function toInputDate(v){ return v?v.slice(0,10):''; }
+
+function badge(status){
+  const map={
+    ativo:'Ativo',offline:'Offline',suspenso:'Suspenso',inativo:'Inativo',
+    'disponível':'Disponível',instalado:'Instalado',em_testes:'Em Testes',
+    em_manutencao:'Em Manutenção',defeituoso:'Defeituoso',descartado:'Descartado',cancelado:'Cancelado',
+    instalacao:'Instalação',suspensao:'Suspensão',reativacao:'Reativação',
+    troca_equipamento:'Troca Equip.',renovacao:'Renovação',observacao:'Observação',cancelamento:'Cancelamento',
+    cobranca:'Cobrança',
+    ativacao_plano:'Ativação EWS',suspensao_plano:'Suspensão EWS',reativacao_plano:'Reativação EWS',
+    transferencia_plano:'Transferência EWS',renovacao_plano:'Renovação EWS'
+  };
+  return `<span class="badge badge-${status}">${map[status]||status}</span>`;
+}
+
+function nomeCliente(id){ const c=clientes.find(x=>x.id===id); return c?c.nome:(id||'–'); }
+function nomeLocal(id)  { const l=locais.find(x=>x.id===id);   return l?l.nome:(id||'–'); }
+function serialEquip(serial){ const e=equipCadastro.find(x=>x.serial===serial); return e?`${e.serial} – ${e.tipo} ${e.modelo||''}`:(serial||'–'); }
+function codigoPlano(id){ const p=planos.find(x=>x.id===id); return p?p.codigo_plano:(id||'–'); }
+
+// ════════════════════════════════════════════════════════════
+//  DASHBOARD
+// ════════════════════════════════════════════════════════════
+function mudarAnoReceita(delta) {
+  window._anoReceita = (window._anoReceita || new Date().getFullYear()) + delta;
+  loadDashboard();
+}
+
+function loadDashboard(){
+  const totalLocais   = locais.length;
+  const totalInst     = instalacoes.length;
+
+  // Popular select de tipos (apenas se ainda não tiver opções além de "Todos")
+  const selTipo = document.getElementById('kpi-ativos-tipo');
+  const tiposExistentes = [...new Set(equipCadastro.map(e=>e.tipo).filter(Boolean))].sort();
+  if(selTipo && selTipo.options.length !== tiposExistentes.length + 1) {
+    const valorAtual = selTipo.value;
+    selTipo.innerHTML = '<option value="">Todos os tipos</option>';
+    tiposExistentes.forEach(t => {
+      const opt = new Option(t, t);
+      if(t === valorAtual) opt.selected = true;
+      selTipo.appendChild(opt);
+    });
+  }
+  const tipoFiltro = selTipo ? selTipo.value : '';
+
+  // Filtra ativos por tipo se selecionado
+  const instAtivos = instalacoes.filter(i => {
+    if(i.status !== 'ativo') return false;
+    if(!tipoFiltro) return true;
+    const eq = equipCadastro.find(e=>e.serial===i.serial);
+    return eq?.tipo === tipoFiltro;
+  });
+  const ativos  = tipoFiltro ? instAtivos.length : instalacoes.filter(i=>i.status==='ativo').length;
+  const ativosLabel = tipoFiltro ? `${instAtivos.length} (${tipoFiltro})` : instalacoes.filter(i=>i.status==='ativo').length;
+
+  // Popular select offline com tipos
+  const selOffline = document.getElementById('kpi-offline-tipo');
+  if(selOffline && selOffline.options.length !== tiposExistentes.length + 1) {
+    const valorAtualOff = selOffline.value;
+    selOffline.innerHTML = '<option value="">Todos os tipos</option>';
+    tiposExistentes.forEach(t => {
+      const opt = new Option(t, t);
+      if(t === valorAtualOff) opt.selected = true;
+      selOffline.appendChild(opt);
+    });
+  }
+  const tipoFiltroOffline = selOffline ? selOffline.value : '';
+
+  const instOffline = instalacoes.filter(i=>{
+    if(i.status!=='offline') return false;
+    if(!tipoFiltroOffline) return true;
+    return equipCadastro.find(e=>e.serial===i.serial)?.tipo===tipoFiltroOffline;
+  });
+  const offlineLabel = tipoFiltroOffline ? `${instOffline.length} (${tipoFiltroOffline})` : instalacoes.filter(i=>i.status==='offline').length;
+  const offline   = instalacoes.filter(i=>i.status==='offline').length;
+  const suspensos = instalacoes.filter(i=>i.status==='suspenso').length;
+  const anoReceita = window._anoReceita || new Date().getFullYear();
+  window._anoReceita = anoReceita;
+  document.getElementById('kpi-receita-ano').textContent = anoReceita;
+
+  // Receita do ano selecionado: anuidades cujo período (inicio→vencimento) cobre algum mês do ano
+  const receitaAnual = instalacoes.filter(i => {
+    if(!i.data_inicio && !i.data_vencimento) return i.status==='ativo';
+    const ini  = i.data_inicio   ? new Date(i.data_inicio+'T00:00:00').getFullYear()   : 0;
+    const fim  = i.data_vencimento? new Date(i.data_vencimento+'T00:00:00').getFullYear(): 9999;
+    return ini <= anoReceita && fim >= anoReceita;
+  }).reduce((s,i)=>s+(Number(i.valor_anuidade)||0), 0);
+  const clientesAtivos= clientes.filter(c=>c.ativo===true).length;
+
+  const vencidos  = instalacoes.filter(i=>i.data_vencimento && diasParaVencer(i.data_vencimento) < 0).length;
+  const proximos  = instalacoes.filter(i=>i.data_vencimento && diasParaVencer(i.data_vencimento) >= 0 && diasParaVencer(i.data_vencimento) <= 90).length;
+
+  document.getElementById('kpi-total-pontos').textContent    = totalLocais;
+  document.getElementById('kpi-pontos-ativos').textContent   = ativosLabel;
+  document.getElementById('kpi-pontos-offline').textContent  = offlineLabel;
+  document.getElementById('kpi-pontos-suspensos').textContent= suspensos;
+  document.getElementById('kpi-vencidos').textContent        = vencidos;
+  document.getElementById('kpi-proximos').textContent        = proximos;
+  document.getElementById('kpi-receita-anual').textContent   = receitaAnual.toLocaleString('pt-BR',{minimumFractionDigits:0});
+  document.getElementById('kpi-total-clientes').textContent  = clientesAtivos;
+
+  renderChartStatus(ativos,offline,suspensos,totalInst-ativos-offline-suspensos);
+  renderChartLocaisPorCliente();
+  renderTabelaVencimentos();
+  renderUltimosEventos();
+}
+
+// ─── MODAIS KPI ──────────────────────────────────────────────
+function abrirModalKpi(tipo) {
+  const configs = {
+    locais:    { title: 'Total de Locais',           icon: 'fa-location-dot',        cor: '#2563eb' },
+    ativos:    { title: 'Equipamentos Ativos',        icon: 'fa-circle-check',         cor: '#16a34a' },
+    offline:   { title: 'Equipamentos Offline',       icon: 'fa-circle-xmark',         cor: '#dc2626' },
+    suspensos: { title: 'Planos Suspensos',           icon: 'fa-pause-circle',         cor: '#d97706' },
+    vencidos:  { title: 'Anuidades Vencidas',         icon: 'fa-calendar-xmark',       cor: '#9f1239' },
+    proximos:  { title: 'Vencem em 90 dias',          icon: 'fa-calendar-exclamation', cor: '#c2410c' },
+    receita:   { title: 'Receita Anual',              icon: 'fa-dollar-sign',          cor: '#7c3aed' },
+    clientes:  { title: 'Clientes Ativos',            icon: 'fa-building',             cor: '#0f766e' },
+  };
+  const cfg = configs[tipo];
+  document.getElementById('modal-kpi-title').innerHTML =
+    `<i class="fa-solid ${cfg.icon}" style="color:${cfg.cor};margin-right:8px"></i>${cfg.title}`;
+
+  let html = '';
+
+  if(tipo === 'locais') {
+    html = tabelaKpi(
+      ['Local','Cliente','Localização','Geotécnico','Equip.'],
+      locais.map(l => [
+        `<strong>${l.nome}</strong>`,
+        nomeCliente(l.id_cliente),
+        l.localizacao||'–',
+        l.geotecnico||'–',
+        instalacoes.filter(i=>i.id_local===l.id).length
+      ])
+    );
+  }
+  else if(tipo === 'ativos') {
+    const tipoF = document.getElementById('kpi-ativos-tipo')?.value||'';
+    const lista = instalacoes.filter(i=>{
+      if(i.status!=='ativo') return false;
+      if(!tipoF) return true;
+      return equipCadastro.find(e=>e.serial===i.serial)?.tipo===tipoF;
+    });
+    html = tabelaInstKpi(lista, 'Nenhum equipamento ativo.');
+  }
+  else if(tipo === 'offline') {
+    const tipoF = document.getElementById('kpi-offline-tipo')?.value||'';
+    const lista = instalacoes.filter(i=>{
+      if(i.status!=='offline') return false;
+      if(!tipoF) return true;
+      return equipCadastro.find(e=>e.serial===i.serial)?.tipo===tipoF;
+    });
+    html = tabelaInstKpi(lista, 'Nenhum equipamento offline.');
+  }
+  else if(tipo === 'suspensos') {
+    const lista = instalacoes.filter(i=>i.status==='suspenso');
+    html = tabelaInstKpi(lista, 'Nenhum plano suspenso.');
+  }
+  else if(tipo === 'vencidos') {
+    const lista = instalacoes
+      .filter(i=>i.data_vencimento && diasParaVencer(i.data_vencimento) < 0)
+      .sort((a,b)=>new Date(a.data_vencimento)-new Date(b.data_vencimento));
+    html = lista.length ? tabelaKpi(
+      ['Local','Equipamento','Cliente','Vencimento','Dias vencido','Valor'],
+      lista.map(i => {
+        const dias = Math.abs(diasParaVencer(i.data_vencimento));
+        const local = locais.find(l=>l.id===i.id_local);
+        return [
+          `<strong>${nomeLocal(i.id_local)}</strong>`,
+          `<code>${i.serial}</code>`,
+          nomeCliente(local?.id_cliente),
+          fmtData(i.data_vencimento),
+          `<span class="venc-critico">${dias} dias</span>`,
+          fmtMoeda(i.valor_anuidade)
+        ];
+      })
+    ) : '<p class="empty-state"><i class="fa-solid fa-circle-check"></i>Nenhuma anuidade vencida.</p>';
+  }
+  else if(tipo === 'proximos') {
+    const lista = instalacoes
+      .filter(i=>i.data_vencimento && diasParaVencer(i.data_vencimento) >= 0 && diasParaVencer(i.data_vencimento) <= 90)
+      .sort((a,b)=>diasParaVencer(a.data_vencimento)-diasParaVencer(b.data_vencimento));
+    html = lista.length ? tabelaKpi(
+      ['Local','Equipamento','Cliente','Vencimento','Dias restantes','Valor'],
+      lista.map(i => {
+        const dias = diasParaVencer(i.data_vencimento);
+        const local = locais.find(l=>l.id===i.id_local);
+        return [
+          `<strong>${nomeLocal(i.id_local)}</strong>`,
+          `<code>${i.serial}</code>`,
+          nomeCliente(local?.id_cliente),
+          fmtData(i.data_vencimento),
+          `<span class="venc-alerta">${dias} dias</span>`,
+          fmtMoeda(i.valor_anuidade)
+        ];
+      })
+    ) : '<p class="empty-state"><i class="fa-solid fa-calendar-check"></i>Nenhum vencimento nos próximos 90 dias.</p>';
+  }
+  else if(tipo === 'receita') {
+    const ano = window._anoReceita || new Date().getFullYear();
+    const instAno = instalacoes.filter(i => {
+      const ini = i.data_inicio    ? new Date(i.data_inicio+'T00:00:00').getFullYear()    : 0;
+      const fim = i.data_vencimento? new Date(i.data_vencimento+'T00:00:00').getFullYear(): 9999;
+      return ini <= ano && fim >= ano;
+    });
+    const porCliente = {};
+    instAno.forEach(i=>{
+      const local = locais.find(l=>l.id===i.id_local);
+      const nomeC = nomeCliente(local?.id_cliente);
+      if(!porCliente[nomeC]) porCliente[nomeC]={qtd:0,total:0};
+      porCliente[nomeC].qtd++;
+      porCliente[nomeC].total += Number(i.valor_anuidade)||0;
+    });
+    const total = Object.values(porCliente).reduce((s,v)=>s+v.total,0);
+    html = `<div style="margin-bottom:16px;padding:14px;background:#f8fafc;border-radius:10px;text-align:center">
+      <div style="font-size:24px;font-weight:700;color:#7c3aed">${total.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-top:4px">Receita de <strong>${ano}</strong> — ${instAno.length} anuidade(s) ativa(s) no período</div>
+    </div>` + tabelaKpi(
+      ['Cliente','Equip. no Período','Receita'],
+      Object.entries(porCliente).sort((a,b)=>b[1].total-a[1].total).map(([nome,v])=>[
+        `<strong>${nome}</strong>`, v.qtd, fmtMoeda(v.total)
+      ])
+    );
+  }
+  else if(tipo === 'clientes') {
+    html = tabelaKpi(
+      ['Cliente','Contato','Locais','Equip. Ativos'],
+      clientes.filter(c=>c.ativo).map(c=>{
+        const locs = locais.filter(l=>l.id_cliente===c.id);
+        const atv  = instalacoes.filter(i=>locs.some(l=>l.id===i.id_local)&&i.status==='ativo').length;
+        return [`<strong>${c.nome}</strong>`, c.contato||'–', locs.length, atv];
+      })
+    );
+  }
+
+  document.getElementById('modal-kpi-body').innerHTML = html || '<p class="empty-state">Sem dados.</p>';
+  abrirModal('modal-kpi');
+}
+
+function tabelaKpi(headers, rows) {
+  if(!rows.length) return '<p class="empty-state">Nenhum registro encontrado.</p>';
+  const ths = headers.map(h=>`<th>${h}</th>`).join('');
+  const trs = rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('');
+  return `<div class="table-responsive"><table class="data-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
+}
+
+function tabelaInstKpi(lista, msgVazia) {
+  if(!lista.length) return `<p class="empty-state">${msgVazia}</p>`;
+  return tabelaKpi(
+    ['Local','Equipamento','Plano EWS','Vencimento','Valor'],
+    lista.map(i => {
+      const local = locais.find(l=>l.id===i.id_local);
+      const dias  = diasParaVencer(i.data_vencimento);
+      const vencCls = dias===null?'':dias<0?'venc-critico':dias<=30?'venc-alerta':'';
+      const vencTxt = dias===null?'–':dias<0?`Vencido (${fmtData(i.data_vencimento)})`:`${fmtData(i.data_vencimento)} (${dias}d)`;
+      return [
+        `<strong>${nomeLocal(i.id_local)}</strong><br><small style="color:var(--text-muted)">${nomeCliente(local?.id_cliente)}</small>`,
+        `<code>${i.serial}</code>`,
+        codigoPlano(i.id_plano)||'–',
+        `<span class="${vencCls}">${vencTxt}</span>`,
+        fmtMoeda(i.valor_anuidade)
+      ];
+    })
+  );
+}
+
+function renderChartStatus(ativos,offline,suspensos,outros){
+  const ctx=document.getElementById('chart-status-pontos').getContext('2d');
+  if(chartStatusInst) chartStatusInst.destroy();
+  chartStatusInst=new Chart(ctx,{
+    type:'doughnut',
+    data:{labels:['Ativos','Offline','Suspensos','Outros'],
+          datasets:[{data:[ativos,offline,suspensos,outros],
+            backgroundColor:['#16a34a','#dc2626','#d97706','#94a3b8'],borderWidth:2,borderColor:'#fff'}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom',labels:{font:{size:12},padding:12}}},cutout:'60%'}
+  });
+}
+
+function renderTrocaEquipDropdown(filtro){
+  const drop = document.getElementById('troca-novo-equip-dropdown');
+  if(!drop) return;
+  const lista = (window._equipTroca||[]).filter(e=>{
+    const txt = `${e.serial} ${e.tipo} ${e.modelo||''}`.toLowerCase();
+    return !filtro || txt.includes(filtro.toLowerCase());
+  });
+  if(!lista.length){
+    drop.innerHTML='<div style="padding:10px 14px;font-size:13px;color:var(--text-muted)">Nenhum equipamento encontrado</div>';
+  } else {
+    drop.innerHTML = lista.map(e=>`
+      <div onclick="selecionarTrocaEquip('${e.serial}','${e.serial} – ${e.tipo} ${(e.modelo||'').replace(/'/g,"\\'")}' )"
+        style="padding:9px 14px;font-size:13px;cursor:pointer;border-bottom:1px solid #f1f5f9;transition:background .15s"
+        onmouseover="this.style.background='#f0f7ff'" onmouseout="this.style.background=''">
+        <strong>${e.serial}</strong> <span style="color:var(--text-muted)">${e.tipo} ${e.modelo||''}</span>
+      </div>`).join('');
+  }
+}
+
+function mostrarTrocaEquipDropdown(){
+  const drop = document.getElementById('troca-novo-equip-dropdown');
+  if(drop) drop.style.display='block';
+}
+
+function filtrarTrocaEquipSelect(){
+  const v = document.getElementById('troca-novo-equip-search')?.value||'';
+  document.getElementById('troca-novo-equip').value = '';
+  renderTrocaEquipDropdown(v);
+  mostrarTrocaEquipDropdown();
+}
+
+function selecionarTrocaEquip(serial, label){
+  document.getElementById('troca-novo-equip').value = serial;
+  document.getElementById('troca-novo-equip-search').value = label;
+  document.getElementById('troca-novo-equip-dropdown').style.display='none';
+}
+
+// Fechar dropdown troca ao clicar fora
+document.addEventListener('click', e=>{
+  const wrap = document.getElementById('troca-novo-equip-search')?.closest('.form-group');
+  if(wrap && !wrap.contains(e.target)){
+    const drop = document.getElementById('troca-novo-equip-dropdown');
+    if(drop) drop.style.display='none';
+  }
+});
+
+
+function renderChartLocaisPorCliente(){
+  const el=document.getElementById('chart-locais-cliente');
+  if(!el) return;
+  const ctx=el.getContext('2d');
+  if(chartLocaisPorCliente) chartLocaisPorCliente.destroy();
+  const counts={};
+  locais.forEach(l=>{ const n=nomeCliente(l.id_cliente); counts[n]=(counts[n]||0)+1; });
+  const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  chartLocaisPorCliente=new Chart(ctx,{
+    type:'bar',
+    data:{labels:sorted.map(x=>x[0]),
+          datasets:[{label:'Locais',data:sorted.map(x=>x[1]),backgroundColor:'#0891b2',borderRadius:6,borderSkipped:false}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{y:{beginAtZero:true,ticks:{stepSize:1},grid:{color:'#f1f5f9'}},x:{grid:{display:false}}}}
+  });
+}
+
+function renderTabelaVencimentos(){
+  const cont=document.getElementById('tabela-vencimentos');
+  const lista=instalacoes
+    .filter(i=>i.data_vencimento)
+    .map(i=>({...i, dias:diasParaVencer(i.data_vencimento)}))
+    .filter(i=>i.dias!==null && i.dias<=90)
+    .sort((a,b)=>a.dias-b.dias);
+
+  if(!lista.length){
+    cont.innerHTML='<p class="empty-state"><i class="fa-solid fa-calendar-check"></i>Nenhum vencimento nos próximos 90 dias e nenhuma anuidade vencida.</p>';
+    return;
+  }
+  const rows=lista.map(i=>{
+    const cls=i.dias<0?'venc-critico':i.dias<=30?'venc-alerta':'venc-ok';
+    const txt=i.dias<0?`Vencido há ${Math.abs(i.dias)} dias`:i.dias===0?'Vence hoje':`${i.dias} dias`;
+    return `<tr>
+      <td><strong>${nomeLocal(i.id_local)}</strong></td>
+      <td>${serialEquip(i.serial)}</td>
+      <td>${nomeCliente(locais.find(l=>l.id===i.id_local)?.id_cliente)}</td>
+      <td>${badge(i.status)}</td>
+      <td>${fmtData(i.data_vencimento)}</td>
+      <td class="${cls}">${txt}</td>
+      <td>${fmtMoeda(i.valor_anuidade)}</td>
+    </tr>`;
+  }).join('');
+  cont.innerHTML=`<table class="data-table"><thead><tr>
+    <th>Local</th><th>Equipamento</th><th>Cliente</th>
+    <th>Status</th><th>Vencimento</th><th>Prazo</th><th>Valor</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderUltimosEventos(){
+  const cont=document.getElementById('tabela-ultimos-eventos');
+  const ult=[...eventos].sort((a,b)=>new Date(b.data_evento)-new Date(a.data_evento)).slice(0,10);
+  if(!ult.length){ cont.innerHTML='<p class="empty-state"><i class="fa-solid fa-inbox"></i>Nenhum evento registrado.</p>'; return; }
+  const rows=ult.map(ev=>`<tr>
+    <td>${fmtData(ev.data_evento)}</td>
+    <td>${ev.id_local?nomeLocal(ev.id_local):ev.id_plano?`Plano ${codigoPlano(ev.id_plano)}`:'–'}</td>
+    <td><code>${ev.serial||'–'}</code></td>
+    <td>${badge(ev.tipo_evento)}</td>
+    <td style="max-width:280px;white-space:normal;font-size:13px">${ev.descricao||'–'}</td>
+    <td>${ev.responsavel||'–'}</td>
+  </tr>`).join('');
+  cont.innerHTML=`<table class="data-table"><thead><tr>
+    <th>Data</th><th>Local</th><th>Equipamento</th><th>Tipo</th><th>Descrição</th><th>Responsável</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// ════════════════════════════════════════════════════════════
+//  LOCAIS DE MONITORAMENTO (accordion)
+// ════════════════════════════════════════════════════════════
+function renderTabelaLocais(){
+  const st=pageState.locais;
+  const search=st.search.toLowerCase();
+
+  let dadosLocais=locais.filter(l=>{
+    const nomeC=nomeCliente(l.id_cliente).toLowerCase();
+    const geo=(l.geotecnico||'').toLowerCase();
+    const okSearch=!search||
+      (l.nome||'').toLowerCase().includes(search)||
+      (l.localizacao||'').toLowerCase().includes(search)||
+      nomeC.includes(search);
+    const okGeo=!st.filterGeotecnico||geo.includes(st.filterGeotecnico.toLowerCase());
+    const okEquip=!st.filterEquipamento||instalacoes.filter(i=>i.id_local===l.id).some(i=>{
+      const eq=equipCadastro.find(e=>e.serial===i.serial);
+      const txt=`${i.serial} ${eq?.tipo||''} ${eq?.modelo||''}`.toLowerCase();
+      return txt.includes(st.filterEquipamento.toLowerCase());
+    });
+    return okSearch&&okGeo&&okEquip;
+  });
+
+  // Se há filtro de equipamento, expandir automaticamente todos os locais filtrados
+  // Se não há filtro, fechar os que foram abertos automaticamente pelo filtro
+  if(st.filterEquipamento){
+    dadosLocais.forEach(l=>locaisExpandidos.add(l.id));
+  }
+
+  const totalPag=Math.max(1,Math.ceil(dadosLocais.length/st.perPage));
+  st.page=Math.min(st.page,totalPag);
+  const slice=dadosLocais.slice((st.page-1)*st.perPage,st.page*st.perPage);
+
+  const tbody=document.getElementById('tbody-locais');
+  if(!slice.length){
+    tbody.innerHTML=`<tr><td colspan="6"><p class="empty-state"><i class="fa-solid fa-location-dot"></i>Nenhum local encontrado.</p></td></tr>`;
+  } else {
+    tbody.innerHTML=slice.map(l=>{
+      const instLocal=instalacoes.filter(i=>i.id_local===l.id);
+      const qtd=instLocal.length;
+      const ativos=instLocal.filter(i=>i.status==='ativo').length;
+      const expandido=locaisExpandidos.has(l.id);
+      // Filtros de status e equipamento aplicados nas instalações
+      const instFiltradas=instLocal.filter(i=>{
+        const okStatus=!st.filterStatus||i.status===st.filterStatus;
+        const okEquip=!st.filterEquipamento||(()=>{
+          const eq=equipCadastro.find(e=>e.serial===i.serial);
+          const txt=`${i.serial} ${eq?.tipo||''} ${eq?.modelo||''}`.toLowerCase();
+          return txt.includes(st.filterEquipamento.toLowerCase());
+        })();
+        return okStatus&&okEquip;
+      });
+
+      let rows=`<tr class="local-row${expandido?' expanded':''}" onclick="toggleLocal('${l.id}')">
+        <td style="width:32px"><i class="fa-solid fa-chevron-right local-chevron${expandido?' rotated':''}"></i></td>
+        <td><strong>${l.nome}</strong></td>
+        <td>${nomeCliente(l.id_cliente)}</td>
+        <td>${l.localizacao||'–'}</td>
+        <td>${l.geotecnico||'<span style="color:#94a3b8">–</span>'}</td>
+        <td>
+          <span class="badge badge-${ativos>0?'ativo':'inativo'}">${st.filterEquipamento?instFiltradas.length+' encontrado(s)':qtd+' equip.'}</span>
+          ${!st.filterEquipamento&&ativos>0?`<span class="badge badge-ativo" style="margin-left:4px">${ativos} ativo${ativos!==1?'s':''}</span>`:''}
+        </td>
+        <td>
+          <div class="action-btns" onclick="event.stopPropagation()">
+            <button class="btn btn-sm btn-primary btn-icon" title="Editar local" onclick="editarLocal('${l.id}')"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn btn-sm btn-success btn-icon" title="Adicionar equipamento" onclick="abrirModalInstalacao('${l.id}')"><i class="fa-solid fa-plus"></i></button>
+            <button class="btn btn-sm btn-danger btn-icon" title="Excluir local" onclick="excluirLocal('${l.id}')"><i class="fa-solid fa-trash"></i></button>
+          </div>
+        </td>
+      </tr>`;
+
+      if(expandido){
+        if(!instFiltradas.length){
+          rows+=`<tr class="inst-row"><td></td><td colspan="6"><p style="padding:12px;color:var(--text-muted);font-size:13px"><i class="fa-solid fa-circle-info" style="margin-right:6px"></i>Nenhum equipamento instalado neste local.</p></td></tr>`;
+        } else {
+          // cabeçalho das instalações
+          rows+=`<tr class="inst-header-row">
+            <td></td>
+            <td><small>EQUIPAMENTO</small></td>
+            <td><small>PLANO EWS</small></td>
+            <td><small>STATUS / VENCIMENTO</small></td>
+            <td><small>VALOR ANUIDADE</small></td>
+            <td><small>AÇÕES</small></td>
+          </tr>`;
+          rows+=instFiltradas.map(i=>{
+            const dias=diasParaVencer(i.data_vencimento);
+            const vencCls=dias!==null?(dias<0?'venc-critico':dias<=30?'venc-alerta':''):'';
+            const vencTxt=dias===null?'–':dias<0?`Vencido (${fmtData(i.data_vencimento)})`:`${fmtData(i.data_vencimento)} (${dias}d)`;
+            return `<tr class="inst-row">
+              <td></td>
+              <td><code style="font-size:13px">${i.serial}</code><br>
+                <small style="color:var(--text-muted)">${equipCadastro.find(e=>e.serial===i.serial)?.tipo||''} ${equipCadastro.find(e=>e.serial===i.serial)?.modelo||''}</small>
+                ${i.data_instalacao?`<br><small style="color:var(--text-muted)"><i class="fa-solid fa-wrench" style="font-size:9px"></i> Inst.: ${fmtData(i.data_instalacao)}</small>`:''}
+              </td>
+              <td>${codigoPlano(i.id_plano)||'–'}</td>
+              <td>${badge(i.status)}<br><span class="${vencCls}" style="font-size:12px">${vencTxt}</span>${i.data_cobranca?`<br><span style="font-size:11px;color:var(--color-teal)"><i class="fa-solid fa-circle-dollar-to-slot" style="font-size:10px"></i> Cobr.: ${fmtData(i.data_cobranca)}</span>`:''}</td>
+              <td>${fmtMoeda(i.valor_anuidade)}</td>
+              <td>
+                <div class="action-btns">
+                  <button class="btn btn-sm btn-primary btn-icon" title="Editar" onclick="editarInstalacao('${i.id}')"><i class="fa-solid fa-pen"></i></button>
+                  <button class="btn btn-sm btn-success btn-icon" title="Renovar anuidade" onclick="abrirRenovacao('${i.id}')"><i class="fa-solid fa-calendar-check"></i></button>
+                  <button class="btn btn-sm btn-info btn-icon" title="Trocar equipamento" onclick="abrirTroca('${i.id}')"><i class="fa-solid fa-arrows-rotate"></i></button>
+                  ${i.status==='ativo'||i.status==='offline'
+                    ?`<button class="btn btn-sm btn-warning btn-icon" title="Suspender" onclick="abrirSuspensao('${i.id}','suspender')"><i class="fa-solid fa-pause"></i></button>`
+                    :i.status==='suspenso'
+                      ?`<button class="btn btn-sm btn-success btn-icon" title="Reativar" onclick="abrirSuspensao('${i.id}','reativar')"><i class="fa-solid fa-play"></i></button>`
+                      :''}
+                  <button class="btn btn-sm btn-secondary btn-icon" title="Ver histórico" onclick="abrirHistoricoEquip('${i.id}')"><i class="fa-solid fa-clock-rotate-left"></i></button>
+                  <button class="btn btn-sm btn-danger btn-icon" title="Remover equipamento" onclick="removerInstalacao('${i.id}')"><i class="fa-solid fa-trash"></i></button>
+                </div>
+              </td>
+            </tr>`;
+          }).join('');
+        }
+      }
+      return rows;
+    }).join('');
+  }
+  renderPagination('pagination-locais',totalPag,st.page,pg=>{st.page=pg;renderTabelaLocais();});
+}
+
+function toggleLocal(id){
+  if(locaisExpandidos.has(id)) locaisExpandidos.delete(id);
+  else locaisExpandidos.add(id);
+  renderTabelaLocais();
+}
+
+// listeners de filtro
+document.getElementById('search-locais').addEventListener('input',e=>{
+  pageState.locais.search=e.target.value; pageState.locais.page=1; renderTabelaLocais();
+});
+document.getElementById('filter-geotecnico').addEventListener('input',e=>{
+  pageState.locais.filterGeotecnico=e.target.value; pageState.locais.page=1; renderTabelaLocais();
+});
+document.getElementById('filter-equipamento').addEventListener('input',e=>{
+  const anterior = pageState.locais.filterEquipamento;
+  pageState.locais.filterEquipamento=e.target.value;
+  // Ao limpar o filtro, fechar todos os locais que foram expandidos automaticamente
+  if(anterior && !e.target.value){
+    locaisExpandidos.clear();
+  }
+  pageState.locais.page=1; renderTabelaLocais();
+});
+document.getElementById('filter-status-locais').addEventListener('change',e=>{
+  pageState.locais.filterStatus=e.target.value; pageState.locais.page=1; renderTabelaLocais();
+});
+
+// ── MODAL LOCAL ──────────────────────────────────────────────
+function abrirModalLocal(){
+  document.getElementById('local-id').value='';
+  document.getElementById('form-local').reset();
+  document.getElementById('local-geotecnico').value='';
+  document.getElementById('modal-local-title').textContent='Novo Local';
+  popularSelectClientes('local-cliente');
+  abrirModal('modal-local');
+}
+
+function editarLocal(id){
+  const l=locais.find(x=>x.id===id); if(!l) return;
+  document.getElementById('modal-local-title').textContent='Editar Local';
+  document.getElementById('local-id').value       = l.id;
+  document.getElementById('local-nome').value     = l.nome||'';
+  document.getElementById('local-localizacao').value = l.localizacao||'';
+  document.getElementById('local-geotecnico').value  = l.geotecnico||'';
+  document.getElementById('local-obs').value      = l.observacoes||'';
+  popularSelectClientes('local-cliente', l.id_cliente);
+  abrirModal('modal-local');
+}
+
+async function salvarLocal(){
+  const id   = document.getElementById('local-id').value;
+  const nome = document.getElementById('local-nome').value.trim();
+  const idCliente = document.getElementById('local-cliente').value;
+  if(!nome||!idCliente) return showToast('Preencha nome e cliente.','error');
+  const dados={
+    nome, id_cliente:idCliente,
+    localizacao: document.getElementById('local-localizacao').value.trim(),
+    geotecnico:  document.getElementById('local-geotecnico').value.trim(),
+    observacoes: document.getElementById('local-obs').value.trim(),
+  };
+  if(id){
+    const idx=locais.findIndex(x=>x.id===id);
+    if(idx!==-1) locais[idx]={...locais[idx],...dados};
+    await db.salvarLocal({id,...dados});
+    showToast('Local atualizado!');
+  } else {
+    const novoId=gerarId();
+    locais.push({id:novoId,...dados});
+    await db.salvarLocal({id:novoId,...dados});
+    showToast('Local cadastrado!');
+  }
+  fecharModal('modal-local'); renderTabelaLocais();
+}
+
+async function excluirLocal(id){
+  const l=locais.find(x=>x.id===id);
+  const inst=instalacoes.filter(i=>i.id_local===id);
+  if(inst.length>0&&!confirm(`O local "${l?.nome}" possui ${inst.length} equipamento(s) instalado(s).\nExcluir mesmo assim? Os equipamentos e eventos vinculados também serão removidos.`)) return;
+  if(inst.length===0&&!confirm(`Excluir o local "${l?.nome}"?`)) return;
+  locais      = locais.filter(x=>x.id!==id);
+  const ids   = inst.map(i=>i.id);
+  instalacoes = instalacoes.filter(i=>i.id_local!==id);
+  eventos     = eventos.filter(e=>!ids.includes(e.id_instalacao)&&e.id_local!==id);
+  await db.excluirLocal(id);
+  showToast('Local excluído.','warning'); renderTabelaLocais();
+}
+
+// ── MODAL INSTALAÇÃO (adicionar/editar equipamento no local) ─
+function abrirModalInstalacao(idLocal){
+  document.getElementById('inst-id').value      = '';
+  document.getElementById('inst-local-id').value= idLocal;
+  document.getElementById('form-inst').reset();
+  document.getElementById('modal-inst-title').textContent='Adicionar Equipamento';
+  document.getElementById('inst-local-nome').value = locais.find(l=>l.id===idLocal)?.nome||'';
+  document.getElementById('inst-status').value = 'ativo';
+  popularSelectEquipInst('inst-serial', null);
+  popularSelectPlanosInst('inst-plano', null);
+  document.getElementById('inst-cobranca').value = '';
+  document.getElementById('inst-data-instalacao').value = hoje();
+  abrirModal('modal-instalacao');
+}
+
+function editarInstalacao(id){
+  const i=instalacoes.find(x=>x.id===id); if(!i) return;
+  const l=locais.find(x=>x.id===i.id_local);
+  document.getElementById('modal-inst-title').textContent='Editar Equipamento';
+  document.getElementById('inst-id').value       = i.id;
+  document.getElementById('inst-local-id').value = i.id_local;
+  document.getElementById('inst-local-nome').value= l?.nome||'';
+  document.getElementById('inst-status').value   = i.status||'ativo';
+  document.getElementById('inst-anuidade').value  = i.valor_anuidade||'';
+  document.getElementById('inst-data-instalacao').value = toInputDate(i.data_instalacao);
+  document.getElementById('inst-inicio').value    = toInputDate(i.data_inicio);
+  document.getElementById('inst-vencimento').value= toInputDate(i.data_vencimento);
+  document.getElementById('inst-cobranca').value  = toInputDate(i.data_cobranca);
+  document.getElementById('inst-obs').value       = i.observacoes||'';
+  popularSelectEquipInst('inst-serial', i.serial);
+  popularSelectPlanosInst('inst-plano', i.id_plano);
+  abrirModal('modal-instalacao');
+}
+
+async function salvarInstalacao(){
+  const id       = document.getElementById('inst-id').value;
+  const idLocal  = document.getElementById('inst-local-id').value;
+  const serial   = document.getElementById('inst-serial').value;
+  const idPlano  = document.getElementById('inst-plano').value;
+  if(!serial) return showToast('Selecione o equipamento.','error');
+
+  const dados={
+    id_local: idLocal, serial,
+    id_plano:        idPlano,
+    status:          document.getElementById('inst-status').value,
+    valor_anuidade:  Number(document.getElementById('inst-anuidade').value)||0,
+    data_instalacao: document.getElementById('inst-data-instalacao').value||null,
+    data_inicio:     document.getElementById('inst-inicio').value||null,
+    data_vencimento: document.getElementById('inst-vencimento').value||null,
+    data_cobranca:   document.getElementById('inst-cobranca').value||null,
+    observacoes:     document.getElementById('inst-obs').value.trim(),
+  };
+
+  if(id){
+    const idx=instalacoes.findIndex(x=>x.id===id);
+    if(idx!==-1) instalacoes[idx]={...instalacoes[idx],...dados};
+    await db.salvarInstalacao({id,...dados});
+    // Atualizar data do evento de instalação se data_instalacao foi informada
+    if(dados.data_instalacao){
+      const evIdx=eventos.findIndex(e=>e.id_instalacao===id && e.tipo_evento==='instalacao');
+      if(evIdx!==-1){
+        eventos[evIdx].data_evento=dados.data_instalacao;
+        eventos[evIdx].descricao=`Equipamento ${dados.serial} instalado.`;
+        await db.salvarEvento(eventos[evIdx]);
+      } else {
+        await registrarEvento({id_local:idLocal, id_instalacao:id, tipo_evento:'instalacao',
+          descricao:`Equipamento ${dados.serial} instalado.`, serial:dados.serial,
+          data_evento:dados.data_instalacao, responsavel:'Sistema'});
+      }
+    }
+    showToast('Equipamento atualizado!');
+  } else {
+    const novoId=gerarId();
+    instalacoes.push({id:novoId,...dados});
+    await db.salvarInstalacao({id:novoId,...dados});
+    const dataEvt = dados.data_instalacao || hoje();
+    await registrarEvento({id_local:idLocal, id_instalacao:novoId, tipo_evento:'instalacao',
+      descricao:`Equipamento ${serial} instalado.`, serial, data_evento:dataEvt, responsavel:'Sistema'});
+    locaisExpandidos.add(idLocal);
+    showToast('Equipamento adicionado!');
+  }
+  fecharModal('modal-instalacao'); renderTabelaLocais();
+}
+
+function abrirHistoricoEquip(idInst){
+  const inst = instalacoes.find(x=>x.id===idInst); if(!inst) return;
+  const local = locais.find(l=>l.id===inst.id_local);
+
+  document.getElementById('modal-hist-equip-title').textContent = `Histórico — ${inst.serial}`;
+  document.getElementById('modal-hist-equip-sub').textContent =
+    `${local?.nome||'–'}  ·  ${equipCadastro.find(e=>e.serial===inst.serial)?.tipo||''} ${equipCadastro.find(e=>e.serial===inst.serial)?.modelo||''}`.trim();
+
+  const evs = eventos
+    .filter(ev => ev.id_instalacao === idInst || ev.serial === inst.serial && ev.id_local === inst.id_local)
+    .sort((a,b)=>new Date(b.data_evento)-new Date(a.data_evento));
+
+  const body = document.getElementById('modal-hist-equip-body');
+  if(!evs.length){
+    body.innerHTML='<p class="empty-state" style="padding:32px"><i class="fa-solid fa-clock-rotate-left"></i>Nenhum evento registrado para este equipamento.</p>';
+  } else {
+    const rows = evs.map(ev=>`<tr>
+      <td style="white-space:nowrap">${fmtData(ev.data_evento)}</td>
+      <td>${badge(ev.tipo_evento)}</td>
+      <td style="max-width:320px;white-space:normal;font-size:13px">${ev.descricao||'–'}</td>
+      <td>${ev.responsavel||'–'}</td>
+    </tr>`).join('');
+    body.innerHTML=`<table class="data-table">
+      <thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Responsável</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+  abrirModal('modal-hist-equip');
+}
+
+async function removerInstalacao(id){
+  const i=instalacoes.find(x=>x.id===id);
+  if(!confirm(`Remover o equipamento "${i?.serial}" deste local?`)) return;
+  instalacoes=instalacoes.filter(x=>x.id!==id);
+  eventos=eventos.filter(e=>e.id_instalacao!==id);
+  await db.excluirInstalacao(id);
+  showToast('Equipamento removido.','warning'); renderTabelaLocais();
+}
+
+// ── RENOVAÇÃO ────────────────────────────────────────────────
+function abrirRenovacao(idInst){
+  const i=instalacoes.find(x=>x.id===idInst); if(!i) return;
+  const l=locais.find(x=>x.id===i.id_local);
+  document.getElementById('renov-inst-id').value    = i.id;
+  document.getElementById('renov-ponto-nome').value = `${l?.nome||''} — ${i.serial}`;
+  document.getElementById('renov-venc-atual').value = i.data_vencimento?fmtData(i.data_vencimento):'Não definido';
+  document.getElementById('renov-valor-atual').value= fmtMoeda(i.valor_anuidade);
+  const base=i.data_vencimento?new Date(i.data_vencimento.slice(0,10)+'T12:00:00'):new Date();
+  base.setFullYear(base.getFullYear()+1);
+  document.getElementById('renov-nova-data').value  = base.toISOString().slice(0,10);
+  document.getElementById('renov-novo-valor').value = i.valor_anuidade||'';
+  document.getElementById('renov-responsavel').value= '';
+  document.getElementById('renov-data-acao').value  = hoje();
+  document.getElementById('renov-data-cobranca').value = '';
+  document.getElementById('renov-obs').value        = '';
+  abrirModal('modal-renovacao');
+}
+
+async function confirmarRenovacao(){
+  const id         = document.getElementById('renov-inst-id').value;
+  const novaData   = document.getElementById('renov-nova-data').value;
+  const novoValor  = document.getElementById('renov-novo-valor').value;
+  const responsavel= document.getElementById('renov-responsavel').value.trim();
+  const dataAcao   = document.getElementById('renov-data-acao').value;
+  const dataCobranca = document.getElementById('renov-data-cobranca').value||null;
+  const obs        = document.getElementById('renov-obs').value.trim();
+  if(!novaData||!responsavel||!dataAcao) return showToast('Informe a nova data, data da renovação e responsável.','error');
+  const idx=instalacoes.findIndex(x=>x.id===id); if(idx===-1) return;
+  const dataAnt=instalacoes[idx].data_vencimento;
+  instalacoes[idx].data_vencimento=novaData;
+  if(novoValor) instalacoes[idx].valor_anuidade=Number(novoValor);
+  if(dataCobranca) instalacoes[idx].data_cobranca=dataCobranca;
+
+  // data_evento = vencimento anterior: é onde o círculo de renovação aparece no Gantt
+  // data_acao fica na descrição para rastreabilidade
+  const dataEventoGantt = dataAnt || dataAcao;
+  await registrarEvento({id_local:instalacoes[idx].id_local,id_instalacao:id,tipo_evento:'renovacao',
+    descricao:`Anuidade renovada em ${fmtData(dataAcao)}. Venc.: ${dataAnt?fmtData(dataAnt):'N/D'} → ${fmtData(novaData)}.${dataCobranca?' Cobrança: '+fmtData(dataCobranca)+'.':''}${obs?' Obs: '+obs:''}`,
+    serial:instalacoes[idx].serial, data_evento:dataEventoGantt, responsavel});
+
+  if(dataCobranca){
+    await registrarEvento({id_local:instalacoes[idx].id_local,id_instalacao:id,tipo_evento:'cobranca',
+      descricao:`Cobrança registrada: ${fmtData(dataCobranca)}.${obs?' Obs: '+obs:''}`,
+      serial:instalacoes[idx].serial, data_evento:dataCobranca, responsavel});
+  }
+  await db.salvarInstalacao(instalacoes[idx]);
+  showToast('Anuidade renovada!'); fecharModal('modal-renovacao'); renderTabelaLocais();
+}
+
+// ── TROCA DE EQUIPAMENTO ─────────────────────────────────────
+function abrirTroca(idInst){
+  const i=instalacoes.find(x=>x.id===idInst); if(!i) return;
+  const l=locais.find(x=>x.id===i.id_local);
+  document.getElementById('troca-inst-id').value     = i.id;
+  document.getElementById('troca-ponto-nome').value  = `${l?.nome||''} — ${i.serial}`;
+  document.getElementById('troca-serial-atual').value= i.serial;
+  document.getElementById('troca-data').value        = hoje();
+  document.getElementById('troca-responsavel').value = '';
+  document.getElementById('troca-obs').value         = '';
+  // Popular campo de busca de equipamentos para troca
+  window._equipTroca = equipCadastro.filter(e=>e.serial!==i.serial);
+  document.getElementById('troca-novo-equip').value = '';
+  document.getElementById('troca-novo-equip-search').value = '';
+  renderTrocaEquipDropdown('');
+  abrirModal('modal-troca');
+}
+
+async function confirmarTroca(){
+  const id          = document.getElementById('troca-inst-id').value;
+  const serialNovo  = document.getElementById('troca-novo-equip').value;
+  const dataAcao    = document.getElementById('troca-data').value;
+  const responsavel = document.getElementById('troca-responsavel').value.trim();
+  const obs         = document.getElementById('troca-obs').value.trim();
+  if(!serialNovo)  return showToast('Selecione o novo equipamento.','error');
+  if(!dataAcao)    return showToast('Informe a data da troca.','error');
+  if(!responsavel) return showToast('Informe o responsável.','error');
+  const idx=instalacoes.findIndex(x=>x.id===id); if(idx===-1) return;
+  const serialAnt=instalacoes[idx].serial;
+  instalacoes[idx].serial=serialNovo;
+  instalacoes[idx].status='ativo';
+  instalacoes[idx].data_instalacao=dataAcao; // atualiza data de instalação para o novo equipamento
+  await registrarEvento({id_local:instalacoes[idx].id_local,id_instalacao:id,tipo_evento:'troca_equipamento',
+    descricao:`Troca: ${serialAnt} → ${serialNovo}.${obs?' Motivo: '+obs:''}`,
+    serial:serialNovo, serial_anterior:serialAnt, data_evento:dataAcao, responsavel});
+  await db.salvarInstalacao(instalacoes[idx]);
+  showToast('Troca realizada! Anuidade preservada.'); fecharModal('modal-troca'); renderTabelaLocais();
+}
+
+// ── SUSPENSÃO / REATIVAÇÃO ───────────────────────────────────
+function abrirSuspensao(idInst,acao){
+  const i=instalacoes.find(x=>x.id===idInst); if(!i) return;
+  const l=locais.find(x=>x.id===i.id_local);
+  document.getElementById('suspensao-ponto-id').value   = i.id;
+  document.getElementById('suspensao-acao').value       = acao;
+  document.getElementById('suspensao-ponto-nome').value = `${l?.nome||''} — ${i.serial}`;
+  document.getElementById('suspensao-data').value       = hoje();
+  document.getElementById('suspensao-responsavel').value= '';
+  document.getElementById('suspensao-obs').value        = '';
+  document.getElementById('modal-suspensao-title').textContent=acao==='suspender'?'Suspender Plano EWS':'Reativar Plano EWS';
+  const btn=document.getElementById('btn-confirmar-suspensao');
+  if(acao==='reativar'){ btn.innerHTML='<i class="fa-solid fa-play"></i> Confirmar Reativação'; btn.className='btn btn-success'; }
+  else { btn.innerHTML='<i class="fa-solid fa-pause"></i> Confirmar Suspensão'; btn.className='btn btn-warning'; }
+  abrirModal('modal-suspensao');
+}
+
+async function confirmarSuspensao(){
+  const id         = document.getElementById('suspensao-ponto-id').value;
+  const acao       = document.getElementById('suspensao-acao').value;
+  const dataAcao   = document.getElementById('suspensao-data').value;
+  const responsavel= document.getElementById('suspensao-responsavel').value.trim();
+  const obs        = document.getElementById('suspensao-obs').value.trim();
+  if(!dataAcao)    return showToast('Informe a data da ação.','error');
+  if(!responsavel) return showToast('Informe o responsável.','error');
+  const idx=instalacoes.findIndex(x=>x.id===id); if(idx===-1) return;
+  instalacoes[idx].status=acao==='suspender'?'suspenso':'ativo';
+  // Atualizar plano EWS
+  if(instalacoes[idx].id_plano){
+    const idxP=planos.findIndex(p=>p.id===instalacoes[idx].id_plano);
+    if(idxP!==-1) planos[idxP].status=acao==='suspender'?'suspenso':'ativo';
+  }
+  await registrarEvento({id_local:instalacoes[idx].id_local,id_instalacao:id,
+    tipo_evento:acao==='suspender'?'suspensao':'reativacao',
+    descricao:`Plano ${acao==='suspender'?'suspenso':'reativado'}.${obs?' Obs: '+obs:''}`,
+    serial:instalacoes[idx].serial, data_evento:dataAcao, responsavel});
+  await db.salvarInstalacao(instalacoes[idx]);
+  showToast(acao==='suspender'?'Plano suspenso.':'Plano reativado!');
+  fecharModal('modal-suspensao'); renderTabelaLocais();
+}
+
+// ════════════════════════════════════════════════════════════
+//  CLIENTES
+// ════════════════════════════════════════════════════════════
+function renderTabelaClientes(){
+  const st=pageState.clientes; const search=st.search.toLowerCase();
+  let dados=clientes.filter(c=>!search||(c.nome||'').toLowerCase().includes(search)||(c.contato||'').toLowerCase().includes(search));
+  const totalPag=Math.max(1,Math.ceil(dados.length/st.perPage));
+  st.page=Math.min(st.page,totalPag);
+  const slice=dados.slice((st.page-1)*st.perPage,st.page*st.perPage);
+  const tbody=document.getElementById('tbody-clientes');
+  tbody.innerHTML=slice.length?slice.map(c=>{
+    const qtd=locais.filter(l=>l.id_cliente===c.id).length;
+    const ativo=c.ativo===true;
+    return `<tr>
+      <td><strong>${c.nome}</strong></td><td>${c.contato||'–'}</td>
+      <td>${c.email?`<a href="mailto:${c.email}">${c.email}</a>`:'–'}</td>
+      <td>${c.telefone||'–'}</td>
+      <td><span class="badge badge-${ativo?'ativo':'inativo'}">${qtd} local${qtd!==1?'is':''}</span></td>
+      <td>${badge(ativo?'ativo':'inativo')}</td>
+      <td><div class="action-btns">
+        <button class="btn btn-sm btn-primary btn-icon" onclick="editarCliente('${c.id}')"><i class="fa-solid fa-pen"></i></button>
+        <button class="btn btn-sm btn-danger btn-icon" onclick="excluirCliente('${c.id}')"><i class="fa-solid fa-trash"></i></button>
+      </div></td></tr>`;
+  }).join(''):`<tr><td colspan="7"><p class="empty-state"><i class="fa-solid fa-building"></i>Nenhum cliente.</p></td></tr>`;
+  renderPagination('pagination-clientes',totalPag,st.page,pg=>{st.page=pg;renderTabelaClientes();});
+}
+
+document.getElementById('search-clientes').addEventListener('input',e=>{
+  pageState.clientes.search=e.target.value; pageState.clientes.page=1; renderTabelaClientes();
+});
+
+function abrirModalCliente(){
+  document.getElementById('cliente-id').value='';
+  document.getElementById('form-cliente').reset();
+  document.getElementById('modal-cliente-title').textContent='Novo Cliente';
+  document.getElementById('cliente-ativo').value='true';
+  abrirModal('modal-cliente');
+}
+function editarCliente(id){
+  const c=clientes.find(x=>x.id===id); if(!c) return;
+  document.getElementById('modal-cliente-title').textContent='Editar Cliente';
+  document.getElementById('cliente-id').value      =c.id;
+  document.getElementById('cliente-nome').value    =c.nome||'';
+  document.getElementById('cliente-contato').value =c.contato||'';
+  document.getElementById('cliente-email').value   =c.email||'';
+  document.getElementById('cliente-telefone').value=c.telefone||'';
+  document.getElementById('cliente-ativo').value   =String(c.ativo);
+  document.getElementById('cliente-obs').value     =c.observacoes||'';
+  abrirModal('modal-cliente');
+}
+async function salvarCliente(){
+  const id=document.getElementById('cliente-id').value;
+  const nome=document.getElementById('cliente-nome').value.trim();
+  if(!nome) return showToast('Informe o nome.','error');
+  const dados={nome,contato:document.getElementById('cliente-contato').value.trim(),
+    email:document.getElementById('cliente-email').value.trim(),
+    telefone:document.getElementById('cliente-telefone').value.trim(),
+    ativo:document.getElementById('cliente-ativo').value==='true',
+    observacoes:document.getElementById('cliente-obs').value.trim()};
+  if(id){const idx=clientes.findIndex(x=>x.id===id);if(idx!==-1)clientes[idx]={...clientes[idx],...dados};await db.salvarCliente({id,...dados});showToast('Cliente atualizado!');}
+  else{const nid=gerarId();clientes.push({id:nid,...dados});await db.salvarCliente({id:nid,...dados});showToast('Cliente cadastrado!');}
+  fecharModal('modal-cliente');renderTabelaClientes();
+}
+async function excluirCliente(id){
+  const vinc=locais.filter(l=>l.id_cliente===id);
+  if(vinc.length>0) return showToast(`Cliente possui ${vinc.length} local(is) vinculado(s).`,'error');
+  const c=clientes.find(x=>x.id===id);
+  if(!confirm(`Excluir "${c?.nome}"?`)) return;
+  clientes=clientes.filter(x=>x.id!==id);
+  await db.excluirCliente(id);showToast('Cliente excluído.','warning');renderTabelaClientes();
+}
+
+// ════════════════════════════════════════════════════════════
+//  EQUIPAMENTOS (catálogo)
+// ════════════════════════════════════════════════════════════
+function renderTabelaEquipamentos(){
+  const st=pageState.equipamentos; const search=st.search.toLowerCase();
+  let dados=equipCadastro.filter(e=>!search||
+    (e.serial||'').toLowerCase().includes(search)||
+    (e.modelo||'').toLowerCase().includes(search)||
+    (e.tipo  ||'').toLowerCase().includes(search));
+
+  // ── Resumo por tipo ──────────────────────────────────────────
+  const contagemTotal={};
+  equipCadastro.forEach(e=>{ const t=e.tipo||'Outros'; contagemTotal[t]=(contagemTotal[t]||0)+1; });
+  const resumoEl=document.getElementById('equip-resumo-tipos');
+  if(resumoEl){
+    const partes=Object.entries(contagemTotal).sort((a,b)=>b[1]-a[1])
+      .map(([tipo,n])=>`<span style="display:inline-flex;align-items:center;gap:5px;background:#f1f5f9;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:500;color:#1e293b">
+        <i class="fa-solid fa-microchip" style="font-size:10px;color:#64748b"></i>${tipo}: <strong>${n}</strong>
+      </span>`).join('');
+    resumoEl.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center">
+      <span style="font-size:12px;color:var(--text-muted);font-weight:500">Total por tipo:</span>
+      ${partes}
+      <span style="font-size:12px;color:var(--text-muted);margin-left:4px">— <strong>${equipCadastro.length}</strong> equipamento(s) no total</span>
+    </div>`;
+  }
+
+  const totalPag=Math.max(1,Math.ceil(dados.length/st.perPage));
+  st.page=Math.min(st.page,totalPag);
+  const slice=dados.slice((st.page-1)*st.perPage,st.page*st.perPage);
+  const tbody=document.getElementById('tbody-equipamentos');
+  tbody.innerHTML=slice.length?slice.map(e=>{
+    const inst=instalacoes.filter(i=>i.serial===e.serial);
+    const locaisInst=inst.map(i=>nomeLocal(i.id_local)).join(', ')||'–';
+    return `<tr>
+      <td><code>${e.serial}</code></td><td>${e.tipo||'–'}</td><td>${e.modelo||'–'}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${locaisInst}</td>
+      <td><div class="action-btns">
+        <button class="btn btn-sm btn-primary btn-icon" onclick="editarEquipamento('${e.id}')"><i class="fa-solid fa-pen"></i></button>
+        <button class="btn btn-sm btn-danger btn-icon" onclick="excluirEquipamento('${e.id}')"><i class="fa-solid fa-trash"></i></button>
+      </div></td></tr>`;
+  }).join(''):`<tr><td colspan="5"><p class="empty-state"><i class="fa-solid fa-microchip"></i>Nenhum equipamento cadastrado.</p></td></tr>`;
+  renderPagination('pagination-equipamentos',totalPag,st.page,pg=>{st.page=pg;renderTabelaEquipamentos();});
+}
+
+document.getElementById('search-equipamentos').addEventListener('input',e=>{
+  pageState.equipamentos.search=e.target.value;pageState.equipamentos.page=1;renderTabelaEquipamentos();
+});
+
+function abrirModalEquipamento(){
+  document.getElementById('equip-id').value='';
+  document.getElementById('form-equipamento').reset();
+  document.getElementById('modal-equip-title').textContent='Novo Equipamento';
+  abrirModal('modal-equipamento');
+}
+function editarEquipamento(id){
+  const e=equipCadastro.find(x=>x.id===id);if(!e)return;
+  document.getElementById('modal-equip-title').textContent='Editar Equipamento';
+  document.getElementById('equip-id').value    =e.id;
+  document.getElementById('equip-serial').value=e.serial||'';
+  document.getElementById('equip-tipo').value  =e.tipo||'Tiltímetro';
+  document.getElementById('equip-modelo').value=e.modelo||'';
+  document.getElementById('equip-obs').value   =e.observacoes||'';
+  abrirModal('modal-equipamento');
+}
+function salvarEquipamento(){
+  const id=document.getElementById('equip-id').value;
+  const serial=document.getElementById('equip-serial').value.trim();
+  if(!serial) return showToast('Informe o serial.','error');
+  if(equipCadastro.find(e=>e.serial===serial&&e.id!==id)) return showToast('Serial já cadastrado.','error');
+  const dados={serial,tipo:document.getElementById('equip-tipo').value,
+    modelo:document.getElementById('equip-modelo').value.trim(),
+    observacoes:document.getElementById('equip-obs').value.trim()};
+  if(id){const idx=equipCadastro.findIndex(x=>x.id===id);if(idx!==-1)equipCadastro[idx]={...equipCadastro[idx],...dados};showToast('Equipamento atualizado!');}
+  else{equipCadastro.push({id:gerarId(),...dados});showToast('Equipamento cadastrado!');}
+  fecharModal('modal-equipamento');renderTabelaEquipamentos();
+}
+function excluirEquipamento(id){
+  const e=equipCadastro.find(x=>x.id===id);
+  const inst=instalacoes.filter(i=>i.serial===e?.serial);
+  if(inst.length>0) return showToast(`Equipamento instalado em ${inst.length} local(is).`,'error');
+  if(!confirm(`Excluir "${e?.serial}"?`)) return;
+  equipCadastro=equipCadastro.filter(x=>x.id!==id);
+  showToast('Equipamento excluído.','warning');renderTabelaEquipamentos();
+}
+
+// ════════════════════════════════════════════════════════════
+//  PLANOS EWS
+// ════════════════════════════════════════════════════════════
+function renderTabelaPlanos(){
+  const st=pageState.planos; const search=st.search.toLowerCase();
+  let dados=planos.filter(p=>{
+    const match=!search||
+      (p.codigo_plano||'').toLowerCase().includes(search)||
+      (p.serial_atual||'').toLowerCase().includes(search);
+    return match&&(!st.filter||p.status===st.filter);
+  });
+  const totalPag=Math.max(1,Math.ceil(dados.length/st.perPage));
+  st.page=Math.min(st.page,totalPag);
+  const slice=dados.slice((st.page-1)*st.perPage,st.page*st.perPage);
+  const tbody=document.getElementById('tbody-planos');
+
+  tbody.innerHTML=slice.length?slice.map(p=>{
+    const dias=diasParaVencer(p.data_vencimento_ews);
+    const vencCls=dias!==null?(dias<0?'venc-critico':dias<=30?'venc-alerta':''):'';
+    const vencTxt=p.data_vencimento_ews
+      ?(dias<0?`Vencido (${fmtData(p.data_vencimento_ews)})`:`${fmtData(p.data_vencimento_ews)} (${dias}d)`):'–';
+
+    // Botões de ação por status
+    let btnsAcao='';
+    if(p.status==='inativo'){
+      btnsAcao+=`<button class="btn btn-sm btn-success btn-icon" title="Ativar plano" onclick="abrirAtivacaoPlano('${p.id}')"><i class="fa-solid fa-play"></i></button>`;
+    }
+    if(p.status==='ativo'){
+      btnsAcao+=`<button class="btn btn-sm btn-warning btn-icon" title="Suspender" onclick="abrirSuspenderPlano('${p.id}','suspender')"><i class="fa-solid fa-pause"></i></button>`;
+      btnsAcao+=`<button class="btn btn-sm btn-info btn-icon" title="Transferir para outro equipamento" onclick="abrirTransferirPlano('${p.id}')"><i class="fa-solid fa-right-left"></i></button>`;
+      btnsAcao+=`<button class="btn btn-sm btn-success btn-icon" title="Renovar anuidade EWS" onclick="abrirRenovarPlano('${p.id}')"><i class="fa-solid fa-calendar-check"></i></button>`;
+    }
+    if(p.status==='suspenso'){
+      btnsAcao+=`<button class="btn btn-sm btn-success btn-icon" title="Reativar" onclick="abrirSuspenderPlano('${p.id}','reativar')"><i class="fa-solid fa-play"></i></button>`;
+      btnsAcao+=`<button class="btn btn-sm btn-info btn-icon" title="Transferir para outro equipamento" onclick="abrirTransferirPlano('${p.id}')"><i class="fa-solid fa-right-left"></i></button>`;
+    }
+    btnsAcao+=`<button class="btn btn-sm btn-primary btn-icon" title="Editar" onclick="editarPlano('${p.id}')"><i class="fa-solid fa-pen"></i></button>`;
+    btnsAcao+=`<button class="btn btn-sm btn-danger btn-icon" title="Excluir" onclick="excluirPlano('${p.id}')"><i class="fa-solid fa-trash"></i></button>`;
+
+    return `<tr>
+      <td><code>${p.codigo_plano}</code></td>
+      <td>${p.tipo_plano||'–'}</td>
+      <td>${p.serial_atual?`<code>${p.serial_atual}</code>`:'<span style="color:#94a3b8">–</span>'}</td>
+      <td>${badge(p.status)}</td>
+      <td>${p.data_ativacao?fmtData(p.data_ativacao):'<span style="color:#94a3b8">Não ativado</span>'}</td>
+      <td class="${vencCls}">${vencTxt}</td>
+      <td><div class="action-btns">${btnsAcao}</div></td>
+    </tr>`;
+  }).join(''):`<tr><td colspan="7"><p class="empty-state"><i class="fa-solid fa-satellite"></i>Nenhum plano cadastrado.</p></td></tr>`;
+
+  renderPagination('pagination-planos',totalPag,st.page,pg=>{st.page=pg;renderTabelaPlanos();});
+}
+
+document.getElementById('search-planos').addEventListener('input',e=>{
+  pageState.planos.search=e.target.value;pageState.planos.page=1;renderTabelaPlanos();
+});
+document.getElementById('filter-status-planos').addEventListener('change',e=>{
+  pageState.planos.filter=e.target.value;pageState.planos.page=1;renderTabelaPlanos();
+});
+
+// ── CADASTRO / EDIÇÃO BÁSICA ─────────────────────────────────
+function abrirModalPlano(){
+  document.getElementById('plano-id').value='';
+  document.getElementById('form-plano').reset();
+  document.getElementById('modal-plano-title').textContent='Novo Plano EWS';
+  popularSelectEquipPlano('plano-serial', null);
+  abrirModal('modal-plano');
+}
+function editarPlano(id){
+  const p=planos.find(x=>x.id===id); if(!p) return;
+  document.getElementById('modal-plano-title').textContent='Editar Plano EWS';
+  document.getElementById('plano-id').value              = p.id;
+  document.getElementById('plano-codigo').value          = p.codigo_plano||'';
+  document.getElementById('plano-tipo').value            = p.tipo_plano||'';
+  document.getElementById('plano-status').value          = p.status||'inativo';
+  document.getElementById('plano-data-ativacao').value   = toInputDate(p.data_ativacao);
+  document.getElementById('plano-data-vencimento').value = toInputDate(p.data_vencimento_ews);
+  document.getElementById('plano-valor-anuidade').value  = p.valor_anuidade_ews||'';
+  document.getElementById('plano-obs').value             = p.observacoes||'';
+  popularSelectEquipPlano('plano-serial', p.serial_atual);
+  abrirModal('modal-plano');
+}
+async function salvarPlano(){
+  const id=document.getElementById('plano-id').value;
+  const codigo=document.getElementById('plano-codigo').value.trim();
+  if(!codigo) return showToast('Informe o código do plano.','error');
+  const dados={
+    codigo_plano:      codigo,
+    tipo_plano:        document.getElementById('plano-tipo').value.trim(),
+    serial_atual:      document.getElementById('plano-serial').value||'',
+    status:            document.getElementById('plano-status').value,
+    data_ativacao:     document.getElementById('plano-data-ativacao').value||null,
+    data_vencimento_ews: document.getElementById('plano-data-vencimento').value||null,
+    valor_anuidade_ews:  Number(document.getElementById('plano-valor-anuidade').value)||0,
+    observacoes:       document.getElementById('plano-obs').value.trim(),
+  };
+  if(id){
+    const idx=planos.findIndex(x=>x.id===id);
+    if(idx!==-1) planos[idx]={...planos[idx],...dados};
+    await db.salvarPlano({id,...dados});
+    showToast('Plano atualizado!');
+  } else {
+    const nid=gerarId();
+    planos.push({id:nid,...dados});
+    await db.salvarPlano({id:nid,...dados});
+    showToast('Plano cadastrado!');
+  }
+  fecharModal('modal-plano'); renderTabelaPlanos();
+}
+async function excluirPlano(id){
+  const p=planos.find(x=>x.id===id);
+  if(!confirm(`Excluir o plano "${p?.codigo_plano}"? O histórico vinculado será mantido.`)) return;
+  planos=planos.filter(x=>x.id!==id);
+  await db.excluirPlano(id); showToast('Plano excluído.','warning'); renderTabelaPlanos();
+}
+
+// ── ATIVAR PLANO ─────────────────────────────────────────────
+function abrirAtivacaoPlano(id){
+  const p=planos.find(x=>x.id===id); if(!p) return;
+  document.getElementById('ativar-plano-id').value   = p.id;
+  document.getElementById('ativar-plano-nome').value = `${p.codigo_plano} – ${p.tipo_plano||''}`;
+  document.getElementById('ativar-data').value       = hoje();
+  document.getElementById('ativar-vencimento').value = '';
+  document.getElementById('ativar-valor').value      = p.valor_anuidade_ews||'';
+  document.getElementById('ativar-responsavel').value= '';
+  document.getElementById('ativar-obs').value        = '';
+  popularSelectEquipPlano('ativar-serial', p.serial_atual);
+  abrirModal('modal-ativar-plano');
+}
+async function confirmarAtivacaoPlano(){
+  const id         = document.getElementById('ativar-plano-id').value;
+  const serial     = document.getElementById('ativar-serial').value;
+  const dataAtiv   = document.getElementById('ativar-data').value;
+  const dataVenc   = document.getElementById('ativar-vencimento').value;
+  const valor      = document.getElementById('ativar-valor').value;
+  const responsavel= document.getElementById('ativar-responsavel').value.trim();
+  const obs        = document.getElementById('ativar-obs').value.trim();
+  if(!serial)      return showToast('Selecione o equipamento.','error');
+  if(!dataAtiv)    return showToast('Informe a data de ativação.','error');
+  if(!dataVenc)    return showToast('Informe o vencimento da anuidade.','error');
+  if(!responsavel) return showToast('Informe o responsável.','error');
+
+  const idx=planos.findIndex(x=>x.id===id); if(idx===-1) return;
+  const serialAnt = planos[idx].serial_atual||'';
+  planos[idx].status             = 'ativo';
+  planos[idx].serial_atual       = serial;
+  planos[idx].data_ativacao      = dataAtiv;
+  planos[idx].data_vencimento_ews= dataVenc;
+  if(valor) planos[idx].valor_anuidade_ews = Number(valor);
+
+  await registrarEventoPlano({
+    id_plano:id, tipo_evento:'ativacao_plano',
+    descricao:`Plano ${planos[idx].codigo_plano} ativado para o equipamento ${serial}. Vencimento: ${fmtData(dataVenc)}.${obs?' Obs: '+obs:''}`,
+    serial, data_evento:dataAtiv, responsavel
+  });
+  await db.salvarPlano(planos[idx]);
+  showToast('Plano ativado!'); fecharModal('modal-ativar-plano'); renderTabelaPlanos();
+}
+
+// ── SUSPENDER / REATIVAR PLANO ───────────────────────────────
+function abrirSuspenderPlano(id, acao){
+  const p=planos.find(x=>x.id===id); if(!p) return;
+  document.getElementById('suspender-plano-id').value         = p.id;
+  document.getElementById('suspender-plano-acao').value       = acao;
+  document.getElementById('suspender-plano-nome').value       = `${p.codigo_plano} – Serial: ${p.serial_atual||'N/D'}`;
+  document.getElementById('suspender-plano-data').value       = hoje();
+  document.getElementById('suspender-plano-responsavel').value= '';
+  document.getElementById('suspender-plano-obs').value        = '';
+  const titulo = acao==='suspender'?'Suspender Plano EWS':'Reativar Plano EWS';
+  document.getElementById('modal-suspender-title').textContent = titulo;
+  const btn = document.getElementById('btn-confirmar-suspender-plano');
+  if(acao==='reativar'){
+    btn.innerHTML='<i class="fa-solid fa-play"></i> Confirmar Reativação';
+    btn.className='btn btn-success';
+  } else {
+    btn.innerHTML='<i class="fa-solid fa-pause"></i> Confirmar Suspensão';
+    btn.className='btn btn-warning';
+  }
+  abrirModal('modal-suspender-plano');
+}
+async function confirmarSuspenderPlano(){
+  const id         = document.getElementById('suspender-plano-id').value;
+  const acao       = document.getElementById('suspender-plano-acao').value;
+  const dataAcao   = document.getElementById('suspender-plano-data').value;
+  const responsavel= document.getElementById('suspender-plano-responsavel').value.trim();
+  const obs        = document.getElementById('suspender-plano-obs').value.trim();
+  if(!dataAcao)    return showToast('Informe a data.','error');
+  if(!responsavel) return showToast('Informe o responsável.','error');
+  const idx=planos.findIndex(x=>x.id===id); if(idx===-1) return;
+  const novoStatus = acao==='suspender'?'suspenso':'ativo';
+  planos[idx].status = novoStatus;
+  const tipoEvt = acao==='suspender'?'suspensao_plano':'reativacao_plano';
+  await registrarEventoPlano({
+    id_plano:id, tipo_evento:tipoEvt,
+    descricao:`Plano ${planos[idx].codigo_plano} ${acao==='suspender'?'suspenso':'reativado'}. Serial: ${planos[idx].serial_atual||'N/D'}.${obs?' Obs: '+obs:''}`,
+    serial:planos[idx].serial_atual||'', data_evento:dataAcao, responsavel
+  });
+  await db.salvarPlano(planos[idx]);
+  showToast(acao==='suspender'?'Plano suspenso.':'Plano reativado!');
+  fecharModal('modal-suspender-plano'); renderTabelaPlanos();
+}
+
+// ── TRANSFERIR PLANO ─────────────────────────────────────────
+function abrirTransferirPlano(id){
+  const p=planos.find(x=>x.id===id); if(!p) return;
+  document.getElementById('transferir-plano-id').value      = p.id;
+  document.getElementById('transferir-plano-nome').value    = `${p.codigo_plano} – ${p.tipo_plano||''}`;
+  document.getElementById('transferir-serial-atual').value  = p.serial_atual||'(nenhum)';
+  document.getElementById('transferir-data').value          = hoje();
+  document.getElementById('transferir-responsavel').value   = '';
+  document.getElementById('transferir-obs').value           = '';
+  const sel=document.getElementById('transferir-serial-novo');
+  sel.innerHTML='<option value="">Selecione o novo equipamento...</option>';
+  equipCadastro.filter(e=>e.serial!==p.serial_atual).forEach(e=>{
+    sel.appendChild(new Option(`${e.serial} – ${e.tipo} ${e.modelo||''}`, e.serial));
+  });
+  abrirModal('modal-transferir-plano');
+}
+async function confirmarTransferirPlano(){
+  const id          = document.getElementById('transferir-plano-id').value;
+  const serialNovo  = document.getElementById('transferir-serial-novo').value;
+  const dataAcao    = document.getElementById('transferir-data').value;
+  const responsavel = document.getElementById('transferir-responsavel').value.trim();
+  const obs         = document.getElementById('transferir-obs').value.trim();
+  if(!serialNovo)  return showToast('Selecione o novo equipamento.','error');
+  if(!dataAcao)    return showToast('Informe a data.','error');
+  if(!responsavel) return showToast('Informe o responsável.','error');
+  const idx=planos.findIndex(x=>x.id===id); if(idx===-1) return;
+  const serialAnt = planos[idx].serial_atual||'';
+  planos[idx].serial_atual = serialNovo;
+  // Manter status ativo (a anuidade continua contando)
+  await registrarEventoPlano({
+    id_plano:id, tipo_evento:'transferencia_plano',
+    descricao:`Plano ${planos[idx].codigo_plano} transferido: ${serialAnt} → ${serialNovo}. Anuidade EWS mantida (venc.: ${fmtData(planos[idx].data_vencimento_ews)}).${obs?' Motivo: '+obs:''}`,
+    serial:serialNovo, serial_anterior:serialAnt, data_evento:dataAcao, responsavel
+  });
+  await db.salvarPlano(planos[idx]);
+  showToast('Plano transferido! Anuidade EWS preservada.'); fecharModal('modal-transferir-plano'); renderTabelaPlanos();
+}
+
+// ── RENOVAR ANUIDADE EWS ─────────────────────────────────────
+function abrirRenovarPlano(id){
+  const p=planos.find(x=>x.id===id); if(!p) return;
+  document.getElementById('renovar-plano-id').value     = p.id;
+  document.getElementById('renovar-plano-nome').value   = `${p.codigo_plano} – Serial: ${p.serial_atual||'N/D'}`;
+  document.getElementById('renovar-venc-atual').value   = p.data_vencimento_ews?fmtData(p.data_vencimento_ews):'Não definido';
+  document.getElementById('renovar-valor-atual').value  = fmtMoeda(p.valor_anuidade_ews);
+  const base = p.data_vencimento_ews?new Date(p.data_vencimento_ews+'T12:00:00'):new Date();
+  base.setFullYear(base.getFullYear()+1);
+  document.getElementById('renovar-nova-data').value    = base.toISOString().slice(0,10);
+  document.getElementById('renovar-novo-valor').value   = p.valor_anuidade_ews||'';
+  document.getElementById('renovar-data-acao').value    = hoje();
+  document.getElementById('renovar-responsavel').value  = '';
+  document.getElementById('renovar-obs').value          = '';
+  abrirModal('modal-renovar-plano');
+}
+async function confirmarRenovarPlano(){
+  const id         = document.getElementById('renovar-plano-id').value;
+  const novaData   = document.getElementById('renovar-nova-data').value;
+  const novoValor  = document.getElementById('renovar-novo-valor').value;
+  const dataAcao   = document.getElementById('renovar-data-acao').value;
+  const responsavel= document.getElementById('renovar-responsavel').value.trim();
+  const obs        = document.getElementById('renovar-obs').value.trim();
+  if(!novaData||!dataAcao||!responsavel) return showToast('Preencha os campos obrigatórios.','error');
+  const idx=planos.findIndex(x=>x.id===id); if(idx===-1) return;
+  const dataAnt=planos[idx].data_vencimento_ews;
+  planos[idx].data_vencimento_ews=novaData;
+  if(novoValor) planos[idx].valor_anuidade_ews=Number(novoValor);
+  await registrarEventoPlano({
+    id_plano:id, tipo_evento:'renovacao_plano',
+    descricao:`Anuidade EWS renovada. Plano ${planos[idx].codigo_plano}. Venc. anterior: ${dataAnt?fmtData(dataAnt):'N/D'} → ${fmtData(novaData)}.${obs?' Obs: '+obs:''}`,
+    serial:planos[idx].serial_atual||'', data_evento:dataAcao, responsavel
+  });
+  await db.salvarPlano(planos[idx]);
+  showToast('Anuidade EWS renovada!'); fecharModal('modal-renovar-plano'); renderTabelaPlanos();
+}
+
+// ── HELPERS PLANO ────────────────────────────────────────────
+function popularSelectEquipPlano(selId, serialAtual=null){
+  const sel=document.getElementById(selId);
+  sel.innerHTML='<option value="">Nenhum vinculado</option>';
+  equipCadastro.forEach(e=>{
+    const opt=new Option(`${e.serial} – ${e.tipo} ${e.modelo||''}`, e.serial);
+    if(e.serial===serialAtual) opt.selected=true;
+    sel.appendChild(opt);
+  });
+}
+
+function registrarEventoPlano(dados){
+  // Eventos de plano ficam no histórico geral com id_local vazio
+  eventos.push({
+    id: gerarId(),
+    id_local: '',
+    id_instalacao: '',
+    serial_anterior: dados.serial_anterior||'',
+    serial_novo: '',
+    ...dados
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+//  EVENTOS
+// ════════════════════════════════════════════════════════════
+function renderTabelaEventos(){
+  const st=pageState.eventos;const search=st.search.toLowerCase();
+  let dados=[...eventos].sort((a,b)=>new Date(b.data_evento)-new Date(a.data_evento)).filter(ev=>{
+    const ref=ev.id_local?nomeLocal(ev.id_local):(ev.id_plano?codigoPlano(ev.id_plano):'');
+    const match=!search||ref.toLowerCase().includes(search)||
+      (ev.serial||'').toLowerCase().includes(search)||(ev.responsavel||'').toLowerCase().includes(search)||(ev.descricao||'').toLowerCase().includes(search);
+    return match&&(!st.filter||ev.tipo_evento===st.filter);
+  });
+  const totalPag=Math.max(1,Math.ceil(dados.length/st.perPage));
+  st.page=Math.min(st.page,totalPag);
+  const slice=dados.slice((st.page-1)*st.perPage,st.page*st.perPage);
+  const tbody=document.getElementById('tbody-eventos');
+  tbody.innerHTML=slice.length?slice.map(ev=>`<tr>
+    <td style="white-space:nowrap">${fmtData(ev.data_evento)}</td>
+    <td>${ev.id_local?nomeLocal(ev.id_local):ev.id_plano?`<span style="color:var(--color-info)"><i class="fa-solid fa-satellite" style="margin-right:4px"></i>Plano ${codigoPlano(ev.id_plano)}</span>`:'–'}</td>
+    <td><code>${ev.serial||'–'}</code></td>
+    <td>${badge(ev.tipo_evento)}</td>
+    <td style="max-width:260px;white-space:normal;font-size:13px">${ev.descricao||'–'}</td>
+    <td>${ev.responsavel||'–'}</td>
+  </tr>`).join(''):`<tr><td colspan="6"><p class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i>Nenhum evento.</p></td></tr>`;
+  renderPagination('pagination-eventos',totalPag,st.page,pg=>{st.page=pg;renderTabelaEventos();});
+}
+
+document.getElementById('search-eventos').addEventListener('input',e=>{
+  pageState.eventos.search=e.target.value;pageState.eventos.page=1;renderTabelaEventos();
+});
+document.getElementById('filter-tipo-evento').addEventListener('change',e=>{
+  pageState.eventos.filter=e.target.value;pageState.eventos.page=1;renderTabelaEventos();
+});
+
+function abrirModalEvento(){
+  document.getElementById('evento-id').value='';
+  document.getElementById('form-evento').reset();
+  document.getElementById('evento-data').value=hoje();
+  popularSelectLocaisEvento('evento-local');
+  abrirModal('modal-evento');
+}
+function salvarEvento(){
+  const idLocal=document.getElementById('evento-local').value;
+  const tipo=document.getElementById('evento-tipo').value;
+  const data=document.getElementById('evento-data').value;
+  const responsavel=document.getElementById('evento-responsavel').value.trim();
+  const descricao=document.getElementById('evento-descricao').value.trim();
+  if(!idLocal||!tipo||!data||!responsavel||!descricao) return showToast('Preencha todos os campos.','error');
+  await registrarEvento({id_local:idLocal,id_instalacao:'',tipo_evento:tipo,descricao,serial:'',data_evento:data,responsavel});
+  showToast('Evento registrado!');fecharModal('modal-evento');renderTabelaEventos();
+}
+
+function registrarEvento(dados){
+  eventos.push({id:gerarId(),serial_anterior:'',serial_novo:'',...dados});
+}
+
+// ─── SELECT HELPERS ──────────────────────────────────────────
+function popularSelectClientes(selId,valorAtual=null){
+  const sel=document.getElementById(selId);
+  sel.innerHTML='<option value="">Selecione o cliente...</option>';
+  clientes.forEach(c=>sel.appendChild(new Option(c.nome,c.id,false,c.id===valorAtual)));
+}
+function popularSelectEquipInst(selId, serialAtual=null){
+  window._equipDisponiveis = equipCadastro; // mostra todos, sem filtrar em uso
+
+  const searchEl = document.getElementById('inst-serial-search');
+  const hiddenEl = document.getElementById('inst-serial');
+  if(!searchEl || !hiddenEl) return;
+
+  hiddenEl.value = serialAtual || '';
+  if(serialAtual){
+    const eq = equipCadastro.find(e=>e.serial===serialAtual);
+    searchEl.value = eq ? `${eq.serial} – ${eq.tipo} ${eq.modelo||''}`.trim() : serialAtual;
+  } else {
+    searchEl.value = '';
+  }
+  renderEquipDropdown('');
+}
+
+function renderEquipDropdown(filtro){
+  const drop = document.getElementById('inst-serial-dropdown');
+  if(!drop) return;
+  const lista = (window._equipDisponiveis||[]).filter(e=>{
+    const txt = `${e.serial} ${e.tipo} ${e.modelo||''}`.toLowerCase();
+    return !filtro || txt.includes(filtro.toLowerCase());
+  });
+  if(!lista.length){
+    drop.innerHTML='<div style="padding:10px 14px;font-size:13px;color:var(--text-muted)">Nenhum equipamento disponível</div>';
+  } else {
+    drop.innerHTML = lista.map(e=>`
+      <div onclick="selecionarEquip('${e.serial}','${e.serial} – ${e.tipo} ${(e.modelo||'').replace(/'/g,"\\'")}' )"
+        style="padding:9px 14px;font-size:13px;cursor:pointer;border-bottom:1px solid #f1f5f9;transition:background .15s"
+        onmouseover="this.style.background='#f0f7ff'" onmouseout="this.style.background=''">
+        <strong>${e.serial}</strong> <span style="color:var(--text-muted)">${e.tipo} ${e.modelo||''}</span>
+      </div>`).join('');
+  }
+}
+
+function mostrarEquipDropdown(){
+  const drop = document.getElementById('inst-serial-dropdown');
+  if(drop) drop.style.display='block';
+}
+
+function filtrarEquipSelect(){
+  const v = document.getElementById('inst-serial-search')?.value||'';
+  document.getElementById('inst-serial').value = ''; // limpa hidden ao digitar
+  renderEquipDropdown(v);
+  mostrarEquipDropdown();
+}
+
+function selecionarEquip(serial, label){
+  document.getElementById('inst-serial').value = serial;
+  document.getElementById('inst-serial-search').value = label;
+  document.getElementById('inst-serial-dropdown').style.display='none';
+}
+
+// Fechar dropdown ao clicar fora
+document.addEventListener('click', e=>{
+  const wrap = document.getElementById('inst-serial-search')?.closest('.form-group');
+  if(wrap && !wrap.contains(e.target)){
+    const drop = document.getElementById('inst-serial-dropdown');
+    if(drop) drop.style.display='none';
+  }
+});
+
+
+function popularSelectPlanosInst(selId,idAtual=null){
+  const sel=document.getElementById(selId);
+  sel.innerHTML='<option value="">Nenhum vinculado</option>';
+  planos.forEach(p=>{
+    const opt=new Option(`${p.codigo_plano} – ${p.tipo_plano||''} (${p.status})`,p.id);
+    if(p.id===idAtual) opt.selected=true;
+    sel.appendChild(opt);
+  });
+}
+function popularSelectLocaisEvento(selId){
+  const sel=document.getElementById(selId);
+  sel.innerHTML='<option value="">Selecione o local...</option>';
+  locais.forEach(l=>sel.appendChild(new Option(`${l.nome} (${nomeCliente(l.id_cliente)})`,l.id)));
+}
+
+// ─── PAGINATION ──────────────────────────────────────────────
+const _pagCb={};
+function renderPagination(cid,total,atual,cb){
+  const cont=document.getElementById(cid);
+  if(!cont||total<=1){if(cont)cont.innerHTML='';return;}
+  _pagCb[cid]=cb;
+  let s=Math.max(1,atual-3),e=Math.min(total,s+6);
+  if(e-s<6) s=Math.max(1,e-6);
+  const btn=(pg,lbl,dis,act)=>`<button class="page-btn${act?' active':''}" ${dis?'disabled':''} data-c="${cid}" data-p="${pg}">${lbl}</button>`;
+  let h=btn(atual-1,'‹',atual===1,false);
+  for(let i=s;i<=e;i++) h+=btn(i,i,false,i===atual);
+  h+=btn(atual+1,'›',atual===total,false);
+  cont.innerHTML=h;
+  cont.querySelectorAll('.page-btn:not([disabled])').forEach(b=>{
+    b.addEventListener('click',()=>{ const f=_pagCb[b.dataset.c]; if(f)f(Number(b.dataset.p)); });
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+//  GRÁFICO GANTT
+// ════════════════════════════════════════════════════════════
+
+let ganttCanvas = null;
+let ganttChart  = null;
+
+// Popula os selects de filtro quando entra na aba
+function initFiltrosGantt() {
+  // Geotécnicos
+  const geos = [...new Set(locais.map(l=>l.geotecnico).filter(Boolean))].sort();
+  const selGeo = document.getElementById('gantt-filter-geo');
+  selGeo.innerHTML = geos.map(g=>`<option value="${g}">${g}</option>`).join('');
+
+  // Clientes
+  const selCli = document.getElementById('gantt-filter-cliente');
+  selCli.innerHTML = clientes.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('');
+
+  // Locais
+  const selLoc = document.getElementById('gantt-filter-local');
+  selLoc.innerHTML = locais.map(l=>`<option value="${l.id}">${l.nome}</option>`).join('');
+
+  // Período padrão: 2 anos atrás até 2 anos à frente
+  if(!document.getElementById('gantt-data-inicio').value) {
+    const ini = new Date(); ini.setFullYear(ini.getFullYear()-1);
+    document.getElementById('gantt-data-inicio').value = ini.toISOString().slice(0,10);
+  }
+  if(!document.getElementById('gantt-data-fim').value) {
+    const fim = new Date(); fim.setFullYear(fim.getFullYear()+1);
+    document.getElementById('gantt-data-fim').value = fim.toISOString().slice(0,10);
+  }
+
+  // Listener encadeado: geo → filtra clientes → filtra locais
+  selGeo.addEventListener('change', atualizarFiltrosCascata);
+  selCli.addEventListener('change', atualizarFiltrosCascata);
+}
+
+function atualizarFiltrosCascata() {
+  const geosSelect = [...document.getElementById('gantt-filter-geo').selectedOptions].map(o=>o.value);
+  const clisSelect = [...document.getElementById('gantt-filter-cliente').selectedOptions].map(o=>o.value);
+
+  // Filtra locais baseado em geo e cliente selecionados
+  const locaisFiltrados = locais.filter(l => {
+    const okGeo = geosSelect.length===0 || geosSelect.includes(l.geotecnico||'');
+    const okCli = clisSelect.length===0 || clisSelect.includes(l.id_cliente);
+    return okGeo && okCli;
+  });
+
+  const selLoc = document.getElementById('gantt-filter-local');
+  const prevSel = [...selLoc.selectedOptions].map(o=>o.value);
+  selLoc.innerHTML = locaisFiltrados.map(l=>`<option value="${l.id}">${l.nome}</option>`).join('');
+  // Mantém seleção anterior que ainda existe
+  [...selLoc.options].forEach(o=>{ if(prevSel.includes(o.value)) o.selected=true; });
+}
+
+function limparFiltrosGantt() {
+  ['gantt-filter-geo','gantt-filter-cliente','gantt-filter-local','gantt-filter-status'].forEach(id=>{
+    [...document.getElementById(id).options].forEach(o=>o.selected=false);
+  });
+  initFiltrosGantt();
+  document.getElementById('gantt-container').innerHTML =
+    '<p class="empty-state"><i class="fa-solid fa-chart-gantt"></i>Configure os filtros e clique em "Gerar Gráfico".</p>';
+  document.getElementById('gantt-legenda').classList.add('hidden');
+  document.getElementById('btn-exportar-gantt').style.display='none';
+  document.getElementById('gantt-titulo').textContent='Aguardando geração...';
+}
+
+async function gerarGantt() {
+  // Garante que a fonte Inter esteja carregada antes de desenhar no canvas
+  await Promise.all([
+    document.fonts.load('bold 14px Inter'),
+    document.fonts.load('11px Inter'),
+    document.fonts.load('bold 11px Inter'),
+    document.fonts.load('9px Inter'),
+    document.fonts.load('8.5px Inter'),
+    document.fonts.load('bold 10px Inter'),
+    document.fonts.load('bold 8px Inter'),
+    document.fonts.load('9.5px Inter'),
+    document.fonts.load('bold 7px Inter'),
+    document.fonts.load('7px Inter'),
+    document.fonts.load('italic bold 11px Inter'),
+  ]).catch(()=>{});
+
+  const selGeos   = [...document.getElementById('gantt-filter-geo').selectedOptions].map(o=>o.value);
+  const selClis   = [...document.getElementById('gantt-filter-cliente').selectedOptions].map(o=>o.value);
+  const selLocs   = [...document.getElementById('gantt-filter-local').selectedOptions].map(o=>o.value);
+  const selStatus = [...document.getElementById('gantt-filter-status').selectedOptions].map(o=>o.value);
+  const mostrarDatas = document.getElementById('gantt-mostrar-labels').checked;
+
+  let instFiltradas = instalacoes.filter(inst => {
+    const l = locais.find(l=>l.id===inst.id_local);
+    if(!l) return false;
+    return (!selGeos.length||selGeos.includes(l.geotecnico||'')) &&
+           (!selClis.length||selClis.includes(l.id_cliente)) &&
+           (!selLocs.length||selLocs.includes(inst.id_local)) &&
+           (!selStatus.length||selStatus.includes(inst.status));
+  });
+
+  if(!instFiltradas.length){
+    document.getElementById('gantt-container').innerHTML='<p class="empty-state"><i class="fa-solid fa-chart-gantt"></i>Nenhum dado encontrado.</p>';
+    document.getElementById('gantt-legenda').classList.add('hidden');
+    document.getElementById('btn-exportar-gantt').style.display='none';
+    return;
+  }
+
+  const locaisIds=[...new Set(instFiltradas.map(i=>i.id_local))];
+  locaisIds.sort((a,b)=>nomeLocal(a).localeCompare(nomeLocal(b)));
+
+  // Período automático
+  let dtIniA=null,dtFimA=null;
+  instFiltradas.forEach(inst=>{
+    if(inst.data_inicio){const d=new Date(inst.data_inicio+'T00:00:00');if(!dtIniA||d<dtIniA)dtIniA=d;}
+    if(inst.data_vencimento){const d=new Date(inst.data_vencimento+'T00:00:00');if(!dtFimA||d>dtFimA)dtFimA=d;}
+    eventos.filter(ev=>ev.id_instalacao===inst.id&&ev.tipo_evento==='renovacao').forEach(ev=>{
+      const d=new Date(ev.data_evento+'T00:00:00');if(!dtFimA||d>dtFimA)dtFimA=d;
+    });
+  });
+  if(!dtIniA){dtIniA=new Date();dtIniA.setFullYear(dtIniA.getFullYear()-1);}
+  if(!dtFimA){dtFimA=new Date();dtFimA.setFullYear(dtFimA.getFullYear()+1);}
+  dtIniA.setDate(1);dtIniA.setMonth(dtIniA.getMonth()-1);
+  dtFimA.setDate(1);dtFimA.setMonth(dtFimA.getMonth()+2);
+  const dtIni=dtIniA,dtFim=dtFimA;
+  document.getElementById('gantt-data-inicio').value=dtIni.toISOString().slice(0,10);
+  document.getElementById('gantt-data-fim').value=dtFim.toISOString().slice(0,10);
+
+  const MESES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+  // Lista de linhas: local (header) + equipamentos indentados
+  const linhas=[];
+  locaisIds.forEach(idLocal=>{
+    const local=locais.find(x=>x.id===idLocal);
+    const instLocal=instFiltradas.filter(i=>i.id_local===idLocal).sort((a,b)=>(a.serial||'').localeCompare(b.serial||''));
+    const desmob=instLocal.every(i=>i.status==='suspenso'||i.status==='inativo');
+    linhas.push({tipo:'local',idLocal,local,qtd:instLocal.length,desmob});
+    instLocal.forEach(inst=>linhas.push({tipo:'equip',inst,desmob:inst.status==='suspenso'||inst.status==='inativo'}));
+  });
+
+  // Dimensões — vertical (A4 retrato ~800px de largura)
+  const TITULO_H=54, EIXO_H=38, ROW_LOC=24, ROW_EQ=34, LABEL_W=195, MARG_BOT=66;
+  const MARG_TOP=TITULO_H+EIXO_H;
+  const totalDias=Math.ceil((dtFim-dtIni)/86400000);
+  const PX=Math.max(1.0,Math.min(2.0,680/totalDias));
+  const CHART_W=Math.round(totalDias*PX);
+  const CANVAS_W=LABEL_W+CHART_W;
+  const totalH=linhas.reduce((s,l)=>s+(l.tipo==='local'?ROW_LOC:ROW_EQ),0);
+  const CANVAS_H=MARG_TOP+totalH+MARG_BOT;
+
+  // Canvas — DPI-aware para nitidez em telas Retina/HiDPI
+  const DPR=window.devicePixelRatio||1;
+  const cont=document.getElementById('gantt-container');
+  cont.innerHTML='';cont.style.overflowX='auto';cont.style.overflowY='hidden';cont.style.padding='0';
+  const wrap=document.createElement('div');
+  wrap.style.width=CANVAS_W+'px';wrap.style.minWidth=CANVAS_W+'px';
+  const cv=document.createElement('canvas');
+  cv.width=Math.round(CANVAS_W*DPR);cv.height=Math.round(CANVAS_H*DPR);
+  cv.style.cssText=`width:${CANVAS_W}px;height:${CANVAS_H}px;max-height:none;display:block;`;
+  wrap.appendChild(cv);cont.appendChild(wrap);
+  ganttCanvas=cv;
+  const ctx=cv.getContext('2d');
+  ctx.scale(DPR,DPR);
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+
+  const xD=d=>LABEL_W+((new Date(d)-dtIni)/(dtFim-dtIni))*CHART_W;
+  const hoje=new Date();hoje.setHours(0,0,0,0);
+  const COR={cob:'#007E7A',r1:'#102A43',r2:'#800020',hoje:'#2563eb',grid:'#e2e8f0',
+    dbarra:'rgba(237,149,130,0.35)',dtxt:'#c2614f'};
+
+  // TÍTULO
+  ctx.fillStyle='#f8fafc';ctx.fillRect(0,0,CANVAS_W,TITULO_H);
+  ctx.strokeStyle='#e2e8f0';ctx.lineWidth=0.8;
+  ctx.beginPath();ctx.moveTo(0,TITULO_H);ctx.lineTo(CANVAS_W,TITULO_H);ctx.stroke();
+  ctx.textAlign='center';
+  ctx.fillStyle='#1e293b';ctx.font='bold 14px Inter,sans-serif';
+  ctx.fillText('Gestão de Anuidades',CANVAS_W/2,TITULO_H/2-4);
+  ctx.fillStyle='#64748b';ctx.font='11px Inter,sans-serif';
+  ctx.fillText('Monitoramento EWS | MecRoc',CANVAS_W/2,TITULO_H/2+12);
+
+  // EIXO X SUPERIOR
+  let cur=new Date(dtIni);cur.setDate(1);
+  while(cur<=dtFim){
+    const x=xD(cur);
+    if(x>=LABEL_W){
+      if(cur.getMonth()===0){
+        ctx.strokeStyle='#334155';ctx.lineWidth=1.5;ctx.setLineDash([]);
+        ctx.beginPath();ctx.moveTo(x,TITULO_H);ctx.lineTo(x,CANVAS_H-MARG_BOT);ctx.stroke();
+        ctx.fillStyle='#1e293b';ctx.font='bold 11px Inter,sans-serif';ctx.textAlign='center';
+        ctx.fillText(cur.getFullYear(),x,TITULO_H+15);
+      } else {
+        ctx.strokeStyle=COR.grid;ctx.lineWidth=0.6;ctx.setLineDash([3,3]);
+        ctx.beginPath();ctx.moveTo(x,MARG_TOP);ctx.lineTo(x,CANVAS_H-MARG_BOT);ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.fillStyle='#64748b';ctx.font='9px Inter,sans-serif';ctx.textAlign='center';
+      ctx.fillText(MESES[cur.getMonth()],x,TITULO_H+30);
+    }
+    cur.setMonth(cur.getMonth()+1);
+  }
+  ctx.setLineDash([]);
+  ctx.strokeStyle='#cbd5e1';ctx.lineWidth=0.8;
+  ctx.beginPath();ctx.moveTo(LABEL_W,MARG_TOP);ctx.lineTo(LABEL_W+CHART_W,MARG_TOP);ctx.stroke();
+
+  // LINHA DE HOJE
+  if(hoje>=dtIni&&hoje<=dtFim){
+    const xH=xD(hoje);
+    ctx.strokeStyle=COR.hoje;ctx.lineWidth=1.5;ctx.setLineDash([5,3]);
+    ctx.beginPath();ctx.moveTo(xH,MARG_TOP);ctx.lineTo(xH,CANVAS_H-MARG_BOT);ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=COR.hoje;ctx.font='bold 8px Inter,sans-serif';ctx.textAlign='center';
+    ctx.fillText('Hoje',xH,MARG_TOP-3);
+  }
+
+  // LINHAS
+  let yOff=MARG_TOP;
+  let eqIdx=0;
+  linhas.forEach(linha=>{
+    if(linha.tipo==='local'){
+      const h=ROW_LOC;
+      ctx.fillStyle=linha.desmob?'#7a3f3f':'#1e293b';
+      ctx.fillRect(0,yOff,CANVAS_W,h);
+      // nome
+      ctx.save();ctx.beginPath();ctx.rect(4,yOff+1,LABEL_W-8,h-2);ctx.clip();
+      ctx.fillStyle='#fff';ctx.font='bold 10px Inter,sans-serif';ctx.textAlign='left';
+      ctx.fillText(linha.local?.nome||linha.idLocal,8,yOff+h/2+3.5);
+      ctx.restore();
+      // qtd à direita no label — REMOVIDO
+      // fundo suave na área do gráfico
+      ctx.fillStyle='rgba(30,41,59,0.05)';ctx.fillRect(LABEL_W,yOff,CHART_W,h);
+      ctx.strokeStyle='#334155';ctx.lineWidth=0.4;
+      ctx.beginPath();ctx.moveTo(0,yOff+h);ctx.lineTo(CANVAS_W,yOff+h);ctx.stroke();
+      yOff+=h;
+    } else {
+      const inst=linha.inst;
+      const h=ROW_EQ;
+      const yM=yOff+h/2;
+      // Fundo alternado
+      if(eqIdx%2===0){
+        ctx.fillStyle=linha.desmob?'rgba(255,200,185,0.12)':'rgba(241,245,249,0.55)';
+        ctx.fillRect(0,yOff,CANVAS_W,h);
+      }
+      eqIdx++;
+      ctx.strokeStyle=COR.grid;ctx.lineWidth=0.3;
+      ctx.beginPath();ctx.moveTo(0,yOff+h);ctx.lineTo(CANVAS_W,yOff+h);ctx.stroke();
+
+      // Label (indentado 18px)
+      ctx.save();ctx.beginPath();ctx.rect(4,yOff+2,LABEL_W-8,h-4);ctx.clip();
+      ctx.fillStyle=linha.desmob?COR.dtxt:'#1e293b';
+      ctx.font=linha.desmob?'italic bold 11px Inter,sans-serif':'bold 11px Inter,sans-serif';
+      ctx.textAlign='left';
+      ctx.fillText(inst.serial||'–',18,yM-4);
+      const eq=equipCadastro.find(e=>e.serial===inst.serial);
+      if(eq){ctx.fillStyle=linha.desmob?'rgba(194,97,79,0.55)':'#94a3b8';ctx.font='8.5px Inter,sans-serif';
+        ctx.fillText(`${eq.tipo||''} ${eq.modelo||''}`.trim(),18,yM+7);}
+      ctx.restore();
+
+      // Barra de fundo
+      const barH=h*0.28,barY=yM-barH/2;
+      if(inst.data_inicio&&inst.data_vencimento){
+        const xB=Math.max(LABEL_W,xD(new Date(inst.data_inicio+'T00:00:00')));
+        const xE=Math.min(LABEL_W+CHART_W,xD(new Date(inst.data_vencimento+'T00:00:00')));
+        if(xE>xB){
+          ctx.fillStyle=linha.desmob?COR.dbarra:'#CFD8DC';
+          ctx.beginPath();ctx.roundRect(xB,barY,xE-xB,barH,2);ctx.fill();
+        }
+      }
+
+      // Losango = data_inicio (Instalação)
+      if(inst.data_inicio){
+        const d=new Date(inst.data_inicio+'T00:00:00');
+        const xI=xD(d);
+        if(xI>=LABEL_W-6&&xI<=LABEL_W+CHART_W+6){
+          desenharLosango(ctx,xI,yM,6,linha.desmob?'rgba(237,177,17,0.4)':'#EDB111','rgba(0,0,0,0.25)');
+          if(mostrarDatas){
+            ctx.fillStyle=linha.desmob?'rgba(100,116,139,0.65)':'#374151';
+            ctx.font='bold 7px Inter,sans-serif';ctx.textAlign='center';
+            ctx.fillText(d.getDate()+'/'+MESES[d.getMonth()],xI,barY-2);
+          }
+        }
+      }
+
+      // Círculos teal = cobranças (data_cobranca da instalação + eventos de cobrança históricos)
+      const cobranças=[
+        ...(inst.data_cobranca?[inst.data_cobranca]:[]),
+        ...eventos.filter(ev=>ev.id_instalacao===inst.id&&ev.tipo_evento==='cobranca')
+          .map(ev=>ev.data_evento)
+      ];
+      // Deduplica e ordena
+      [...new Set(cobranças)].sort().forEach(dc=>{
+        const xC=xD(new Date(dc+'T00:00:00'));
+        if(xC>=LABEL_W-6&&xC<=LABEL_W+CHART_W+6){
+          ctx.beginPath();ctx.arc(xC,yM,5,0,Math.PI*2);
+          ctx.fillStyle=linha.desmob?'rgba(0,126,122,0.3)':COR.cob;ctx.fill();
+          ctx.strokeStyle='rgba(0,0,0,0.25)';ctx.lineWidth=0.7;ctx.stroke();
+          if(mostrarDatas){
+            const d=new Date(dc+'T00:00:00');
+            ctx.fillStyle=linha.desmob?'rgba(100,116,139,0.65)':'#374151';
+            ctx.font='7px Inter,sans-serif';ctx.textAlign='center';
+            ctx.fillText(d.getDate()+'/'+MESES[d.getMonth()],xC,yM+barH/2+10);
+          }
+        }
+      });
+
+      // Círculo azul escuro = data_vencimento atual (ponto final da anuidade vigente)
+      // Círculos de renovação do histórico ordenados por data = 1ª, 2ª, 3ª...
+      // Lógica: renovações são plotadas na data do vencimento anterior (onde ocorreu a virada)
+      const renovs = eventos
+        .filter(ev=>ev.id_instalacao===inst.id && ev.tipo_evento==='renovacao')
+        .sort((a,b)=>new Date(a.data_evento)-new Date(b.data_evento));
+
+      // Cores: 1ª renovação = azul escuro, 2ª = vinho, 3ª+ = roxo
+      const coresRenov = [COR.r1, COR.r2, '#7c3aed', '#0f766e'];
+
+      renovs.forEach((ev, ri)=>{
+        const dr=new Date(ev.data_evento+'T00:00:00');
+        const xR=xD(dr);
+        if(xR>=LABEL_W-6&&xR<=LABEL_W+CHART_W+6){
+          ctx.beginPath();ctx.arc(xR,yM,5,0,Math.PI*2);
+          ctx.fillStyle=linha.desmob?'rgba(100,116,139,0.3)':coresRenov[ri]||COR.r2;ctx.fill();
+          ctx.strokeStyle='rgba(0,0,0,0.25)';ctx.lineWidth=0.7;ctx.stroke();
+          if(mostrarDatas){
+            ctx.fillStyle=linha.desmob?'rgba(100,116,139,0.65)':'#374151';
+            ctx.font='bold 7px Inter,sans-serif';ctx.textAlign='center';
+            ctx.fillText(dr.getDate()+'/'+MESES[dr.getMonth()],xR,barY-2);
+          }
+        }
+      });
+
+      // Círculo azul escuro = data_vencimento vigente (se não há renovações, é a 1ª Renovação)
+      // Se já há renovações, mantém azul para indicar o vencimento atual
+      if(inst.data_vencimento){
+        const dv=new Date(inst.data_vencimento+'T00:00:00');
+        const xV=xD(dv);
+        if(xV>=LABEL_W-6&&xV<=LABEL_W+CHART_W+6){
+          const corVenc = renovs.length===0 ? COR.r1 : coresRenov[renovs.length]||COR.r2;
+          ctx.beginPath();ctx.arc(xV,yM,5,0,Math.PI*2);
+          ctx.fillStyle=linha.desmob?'rgba(16,42,67,0.3)':corVenc;ctx.fill();
+          ctx.strokeStyle='rgba(0,0,0,0.25)';ctx.lineWidth=0.7;ctx.stroke();
+          if(mostrarDatas){
+            ctx.fillStyle=linha.desmob?'rgba(100,116,139,0.65)':'#374151';
+            ctx.font='bold 7px Inter,sans-serif';ctx.textAlign='center';
+            ctx.fillText(dv.getDate()+'/'+MESES[dv.getMonth()],xV,barY-2);
+          }
+        }
+      }
+      yOff+=h;
+    }
+  });
+
+  // Separador coluna labels
+  ctx.strokeStyle='#cbd5e1';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(LABEL_W,TITULO_H);ctx.lineTo(LABEL_W,CANVAS_H-MARG_BOT);ctx.stroke();
+
+  // EIXO X BASE — removido (meses já aparecem no topo)
+  const yBase=CANVAS_H-MARG_BOT;
+  ctx.strokeStyle='#cbd5e1';ctx.lineWidth=0.8;
+  ctx.beginPath();ctx.moveTo(LABEL_W,yBase);ctx.lineTo(LABEL_W+CHART_W,yBase);ctx.stroke();
+
+  // LEGENDA RODAPÉ
+  const legItems=[
+    {t:'losango',c:'#EDB111',l:'Instalação'},
+    {t:'circulo',c:COR.cob,l:'Cobrança'},
+    {t:'circulo',c:COR.r1,l:'1ª Renovação'},
+    {t:'circulo',c:COR.r2,l:'2ª Renovação'},
+    {t:'barra',c:'rgba(237,149,130,0.5)',l:'Desmobilizado'},
+  ];
+  ctx.font='9.5px Inter,sans-serif';
+  let tw=legItems.reduce((s,it)=>s+(it.t==='barra'?28:12)+ctx.measureText(it.l).width+16,0);
+  let lx=Math.max(LABEL_W+8,(CANVAS_W-tw)/2);
+  const ly=yBase+22;
+  legItems.forEach(it=>{
+    if(it.t==='losango'){desenharLosango(ctx,lx+5,ly,5,it.c,'rgba(0,0,0,0.3)');lx+=12;}
+    else if(it.t==='circulo'){ctx.beginPath();ctx.arc(lx+5,ly,4,0,Math.PI*2);ctx.fillStyle=it.c;ctx.fill();ctx.strokeStyle='rgba(0,0,0,0.2)';ctx.lineWidth=0.6;ctx.stroke();lx+=12;}
+    else{ctx.fillStyle=it.c;ctx.beginPath();ctx.roundRect(lx,ly-5,26,10,2);ctx.fill();ctx.strokeStyle='rgba(0,0,0,0.1)';ctx.lineWidth=0.4;ctx.stroke();lx+=30;}
+    ctx.fillStyle='#374151';ctx.textAlign='left';ctx.font='9.5px Inter,sans-serif';
+    const w=ctx.measureText(it.l).width;ctx.fillText(it.l,lx,ly+4);lx+=w+16;
+  });
+
+  document.getElementById('gantt-legenda').classList.add('hidden');
+  document.getElementById('gantt-titulo').textContent=`${locaisIds.length} local(is) · ${instFiltradas.length} equipamento(s)`;
+  document.getElementById('btn-exportar-gantt').style.display='inline-flex';
+}
+
+function desenharLosango(ctx, x, y, r, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(x, y-r);
+  ctx.lineTo(x+r, y);
+  ctx.lineTo(x, y+r);
+  ctx.lineTo(x-r, y);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+}
+
+function exportarGanttPNG() {
+  if(!ganttCanvas) return;
+  const link = document.createElement('a');
+  link.download = `gantt_anuidades_${hoje()}.png`;
+  link.href = ganttCanvas.toDataURL('image/png');
+  link.click();
+  showToast('Gráfico exportado!');
+}
+
+// ── Adicionar navegação Gantt no pageTitles ──────────────────
+// (adicionado ao objeto pageTitles)
+
+// ─── BOTÃO NOVO EVENTO ────────────────────────────────────────
+(function(){
+  const tb=document.querySelector('#page-eventos .toolbar');
+  if(tb){ const b=document.createElement('button'); b.className='btn btn-primary';
+    b.innerHTML='<i class="fa-solid fa-plus"></i> Novo Evento'; b.onclick=abrirModalEvento; tb.appendChild(b); }
+})();
+
+// ─── INIT ─────────────────────────────────────────────────────
+updateDate();
+
+async function iniciarApp(){
+  showToast('Conectando ao banco de dados...', 'warning');
+  try {
+    await dbCarregar();
+    // Se não há dados, carrega exemplos
+    if(!clientes.length && !locais.length){
+      await db.importarTudo({
+        clientes:     DADOS_EXEMPLO.clientes,
+        equipCadastro: DADOS_EXEMPLO.equipamentos_cadastro,
+        planos:       DADOS_EXEMPLO.planos_aws,
+        locais:       DADOS_EXEMPLO.locais,
+        instalacoes:  DADOS_EXEMPLO.instalacoes,
+        eventos:      DADOS_EXEMPLO.eventos,
+      });
+      await dbCarregar();
+      showToast('Dados de exemplo carregados!');
+    } else {
+      showToast('Dados carregados!');
+    }
+  } catch(e) {
+    showToast('Erro ao conectar ao banco. Verifique as credenciais do Supabase.', 'error');
+    console.error(e);
+  }
+  loadPage('dashboard');
+}
+
+iniciarApp();
