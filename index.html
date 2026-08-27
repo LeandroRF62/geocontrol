@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoControl – Controle de Anuidades</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- Supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<aside id="sidebar" class="sidebar">
+  <div class="sidebar-brand">
+    <img src="logo_mecroc.png" alt="MecRoc" style="height:36px;object-fit:contain;max-width:180px;" />
+  </div>
+  <nav class="sidebar-nav">
+    <a href="#" class="nav-item active" data-page="dashboard"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
+    <a href="#" class="nav-item" data-page="locais"><i class="fa-solid fa-location-dot"></i> Locais</a>
+    <a href="#" class="nav-item" data-page="clientes"><i class="fa-solid fa-building"></i> Clientes</a>
+    <a href="#" class="nav-item" data-page="equipamentos"><i class="fa-solid fa-microchip"></i> Equipamentos</a>
+    <a href="#" class="nav-item" data-page="planos"><i class="fa-solid fa-satellite"></i> Planos EWS</a>
+    <a href="#" class="nav-item" data-page="gantt"><i class="fa-solid fa-chart-gantt"></i> Gráfico Gantt</a>
+    <a href="#" class="nav-item" data-page="eventos"><i class="fa-solid fa-clock-rotate-left"></i> Histórico</a>
+  </nav>
+  <div class="sidebar-footer"><span>v2.0 · 2025</span></div>
+</aside>
+
+<div class="topbar">
+  <button id="sidebar-toggle" class="sidebar-toggle-btn"><i class="fa-solid fa-bars"></i></button>
+  <div class="topbar-title" id="page-title">Controle das Anuidades dos Equipamentos</div>
+  <div class="topbar-actions">
+    <span id="topbar-date" class="topbar-date"></span>
+    <button class="btn btn-sm btn-secondary" onclick="importarJSON()" title="Importar JSON"><i class="fa-solid fa-file-import"></i> <span class="topbar-btn-label">Importar</span></button>
+    <button class="btn btn-sm btn-primary"   onclick="exportarJSON()" title="Exportar JSON"><i class="fa-solid fa-file-export"></i> <span class="topbar-btn-label">Exportar</span></button>
+    <button class="btn btn-sm btn-danger"    onclick="limparDados()"  title="Limpar dados"><i class="fa-solid fa-trash-can"></i></button>
+  </div>
+</div>
+
+<main id="main-content" class="main-content">
+
+  <!-- DASHBOARD -->
+  <section id="page-dashboard" class="page active">
+    <div class="page-header"><h1>Dashboard</h1><p>Visão geral do sistema de anuidades</p></div>
+    <div class="kpi-grid" id="kpi-grid">
+      <div class="kpi-card kpi-blue kpi-clickable" onclick="abrirModalKpi('locais')"><div class="kpi-icon"><i class="fa-solid fa-location-dot"></i></div><div class="kpi-info"><div class="kpi-value" id="kpi-total-pontos">–</div><div class="kpi-label">Total de Locais</div></div></div>
+      <div class="kpi-card kpi-green kpi-clickable" onclick="abrirModalKpi('ativos')" style="flex-direction:column;align-items:flex-start;gap:8px">
+        <div style="display:flex;align-items:center;gap:12px;width:100%">
+          <div class="kpi-icon"><i class="fa-solid fa-circle-check"></i></div>
+          <div class="kpi-info" style="flex:1">
+            <div class="kpi-value" id="kpi-pontos-ativos">–</div>
+            <div class="kpi-label">Equip. Ativos</div>
+          </div>
+        </div>
+        <div style="width:100%" onclick="event.stopPropagation()">
+          <select id="kpi-ativos-tipo" onchange="loadDashboard()" style="width:100%;font-size:11px;padding:3px 7px;border:1px solid rgba(22,163,74,0.25);border-radius:6px;background:rgba(22,163,74,0.07);color:#15803d;cursor:pointer;font-family:inherit">
+            <option value="">Todos os tipos</option>
+          </select>
+        </div>
+      </div>
+      <div class="kpi-card kpi-red kpi-clickable" onclick="abrirModalKpi('offline')" style="flex-direction:column;align-items:flex-start;gap:8px">
+        <div style="display:flex;align-items:center;gap:12px;width:100%">
+          <div class="kpi-icon"><i class="fa-solid fa-circle-xmark"></i></div>
+          <div class="kpi-info" style="flex:1">
+            <div class="kpi-value" id="kpi-pontos-offline">–</div>
+            <div class="kpi-label">Equip. Offline</div>
+          </div>
+        </div>
+        <div style="width:100%" onclick="event.stopPropagation()">
+          <select id="kpi-offline-tipo" onchange="loadDashboard()" style="width:100%;font-size:11px;padding:3px 7px;border:1px solid rgba(220,38,38,0.25);border-radius:6px;background:rgba(220,38,38,0.07);color:#dc2626;cursor:pointer;font-family:inherit">
+            <option value="">Todos os tipos</option>
+          </select>
+        </div>
+      </div>
+      <div class="kpi-card kpi-yellow kpi-clickable" onclick="abrirModalKpi('suspensos')"><div class="kpi-icon"><i class="fa-solid fa-pause-circle"></i></div><div class="kpi-info"><div class="kpi-value" id="kpi-pontos-suspensos">–</div><div class="kpi-label">Planos Suspensos</div></div></div>
+      <div class="kpi-card kpi-danger kpi-clickable" onclick="abrirModalKpi('vencidos')"><div class="kpi-icon"><i class="fa-solid fa-calendar-xmark"></i></div><div class="kpi-info"><div class="kpi-value" id="kpi-vencidos">–</div><div class="kpi-label">Anuidades Vencidas</div></div></div>
+      <div class="kpi-card kpi-orange kpi-clickable" onclick="abrirModalKpi('proximos')"><div class="kpi-icon"><i class="fa-solid fa-calendar-exclamation"></i></div><div class="kpi-info"><div class="kpi-value" id="kpi-proximos">–</div><div class="kpi-label">Vencem em 90 dias</div></div></div>
+      <div class="kpi-card kpi-purple kpi-clickable" onclick="abrirModalKpi('receita')" style="flex-direction:column;align-items:flex-start;gap:8px">
+        <div style="display:flex;align-items:center;gap:12px;width:100%">
+          <div class="kpi-icon"><i class="fa-solid fa-dollar-sign"></i></div>
+          <div class="kpi-info" style="flex:1">
+            <div class="kpi-value" id="kpi-receita-anual">–</div>
+            <div class="kpi-label">Receita Anual (R$)</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;width:100%" onclick="event.stopPropagation()">
+          <button onclick="mudarAnoReceita(-1)" style="background:rgba(124,58,237,0.12);border:none;border-radius:6px;width:24px;height:24px;cursor:pointer;font-size:12px;color:#7c3aed;display:flex;align-items:center;justify-content:center">‹</button>
+          <span id="kpi-receita-ano" style="font-size:13px;font-weight:600;color:#7c3aed;min-width:36px;text-align:center"></span>
+          <button onclick="mudarAnoReceita(1)" style="background:rgba(124,58,237,0.12);border:none;border-radius:6px;width:24px;height:24px;cursor:pointer;font-size:12px;color:#7c3aed;display:flex;align-items:center;justify-content:center">›</button>
+        </div>
+      </div>
+      <div class="kpi-card kpi-teal kpi-clickable" onclick="abrirModalKpi('clientes')"><div class="kpi-icon"><i class="fa-solid fa-building"></i></div><div class="kpi-info"><div class="kpi-value" id="kpi-total-clientes">–</div><div class="kpi-label">Clientes Ativos</div></div></div>
+    </div>
+    <div class="dashboard-grid">
+      <div class="card"><div class="card-header"><h3><i class="fa-solid fa-chart-pie"></i> Status dos Equipamentos</h3></div><div class="card-body" style="height:260px;display:flex;align-items:center;justify-content:center;"><canvas id="chart-status-pontos"></canvas></div></div>
+      <div class="card"><div class="card-header"><h3><i class="fa-solid fa-chart-bar"></i> Locais por Cliente</h3></div><div class="card-body" style="height:260px;"><canvas id="chart-locais-cliente"></canvas></div></div>
+      <div class="card card-full"><div class="card-header"><h3><i class="fa-solid fa-calendar-exclamation"></i> Anuidades Vencidas e com Vencimento Próximo (90 dias)</h3></div><div class="card-body"><div id="tabela-vencimentos" class="table-responsive"><p class="empty-state">Carregando...</p></div></div></div>
+      <div class="card card-full"><div class="card-header"><h3><i class="fa-solid fa-clock-rotate-left"></i> Últimos Eventos</h3></div><div class="card-body"><div id="tabela-ultimos-eventos" class="table-responsive"><p class="empty-state">Carregando...</p></div></div></div>
+    </div>
+  </section>
+
+  <!-- LOCAIS DE MONITORAMENTO -->
+  <section id="page-locais" class="page">
+    <div class="page-header"><h1>Locais de Monitoramento</h1><p>Clique em um local para ver e gerenciar os equipamentos instalados</p></div>
+    <div class="toolbar">
+      <input type="text" id="search-locais" class="search-input" placeholder="Buscar por nome, localização ou cliente..." />
+      <input type="text" id="filter-geotecnico" class="search-input" style="max-width:220px" placeholder="Filtrar por geotécnico..." />
+      <input type="text" id="filter-equipamento" class="search-input" style="max-width:220px" placeholder="Filtrar por serial ou tipo..." />
+      <select id="filter-status-locais" class="filter-select">
+        <option value="">Todos os status</option>
+        <option value="ativo">Ativo</option>
+        <option value="offline">Offline</option>
+        <option value="suspenso">Suspenso</option>
+        <option value="inativo">Inativo</option>
+      </select>
+      <button class="btn btn-primary" onclick="abrirModalLocal()"><i class="fa-solid fa-plus"></i> Novo Local</button>
+    </div>
+    <div class="table-responsive">
+      <table class="data-table" id="tabela-locais">
+        <thead>
+          <tr>
+            <th style="width:32px"></th>
+            <th>Nome do Local</th>
+            <th>Cliente</th>
+            <th>Localização</th>
+            <th>Geotécnico Responsável</th>
+            <th>Equipamentos</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody id="tbody-locais"></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pagination-locais"></div>
+  </section>
+
+  <!-- CLIENTES -->
+  <section id="page-clientes" class="page">
+    <div class="page-header"><h1>Clientes</h1><p>Empresas e organizações atendidas</p></div>
+    <div class="toolbar">
+      <input type="text" id="search-clientes" class="search-input" placeholder="Buscar por nome ou contato..." />
+      <button class="btn btn-primary" onclick="abrirModalCliente()"><i class="fa-solid fa-plus"></i> Novo Cliente</button>
+    </div>
+    <div class="table-responsive">
+      <table class="data-table"><thead><tr><th>Nome</th><th>Contato</th><th>E-mail</th><th>Telefone</th><th>Locais</th><th>Status</th><th>Ações</th></tr></thead>
+      <tbody id="tbody-clientes"></tbody></table>
+    </div>
+    <div class="pagination" id="pagination-clientes"></div>
+  </section>
+
+  <!-- EQUIPAMENTOS -->
+  <section id="page-equipamentos" class="page">
+    <div class="page-header"><h1>Equipamentos</h1><p>Catálogo de equipamentos disponíveis para instalação nos locais</p></div>
+    <div class="toolbar">
+      <input type="text" id="search-equipamentos" class="search-input" placeholder="Buscar por serial ou modelo..." />
+      <button class="btn btn-primary" onclick="abrirModalEquipamento()"><i class="fa-solid fa-plus"></i> Novo Equipamento</button>
+    </div>
+    <div id="equip-resumo-tipos"></div>
+    <div class="table-responsive">
+      <table class="data-table"><thead><tr><th>Serial</th><th>Tipo</th><th>Modelo</th><th>Instalado em</th><th>Ações</th></tr></thead>
+      <tbody id="tbody-equipamentos"></tbody></table>
+    </div>
+    <div class="pagination" id="pagination-equipamentos"></div>
+  </section>
+
+  <!-- PLANOS EWS -->
+  <section id="page-planos" class="page">
+    <div class="page-header"><h1>Planos EWS Monitoring</h1><p>Controle dos planos de comunicação Iridium — anuidade MecRoc junto à EWS</p></div>
+    <div class="toolbar">
+      <input type="text" id="search-planos" class="search-input" placeholder="Buscar por código do plano ou serial..." />
+      <select id="filter-status-planos" class="filter-select">
+        <option value="">Todos os status</option>
+        <option value="inativo">Inativo (não ativado)</option>
+        <option value="ativo">Ativo</option>
+        <option value="suspenso">Suspenso</option>
+        <option value="cancelado">Cancelado</option>
+      </select>
+      <button class="btn btn-primary" onclick="abrirModalPlano()"><i class="fa-solid fa-plus"></i> Novo Plano</button>
+    </div>
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Código Plano</th>
+            <th>Tipo</th>
+            <th>Equipamento Atual</th>
+            <th>Status EWS</th>
+            <th>Início Ativação</th>
+            <th>Venc. Anuidade EWS</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody id="tbody-planos"></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pagination-planos"></div>
+  </section>
+
+  <!-- GRÁFICO GANTT -->
+  <section id="page-gantt" class="page">
+    <div class="page-header"><h1>Gráfico Gantt</h1><p>Visualização dinâmica das anuidades por local e equipamento</p></div>
+
+    <!-- PAINEL DE FILTROS -->
+    <div class="gantt-filters card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="fa-solid fa-sliders"></i> Filtros</h3>
+        <button class="btn btn-sm btn-secondary" onclick="limparFiltrosGantt()"><i class="fa-solid fa-rotate-left"></i> Limpar</button>
+      </div>
+      <div class="card-body">
+        <div class="gantt-filter-grid">
+          <div class="form-group">
+            <label>Geotécnico Responsável</label>
+            <select id="gantt-filter-geo" multiple size="4"></select>
+            <small style="color:var(--text-muted)">Ctrl+clique para múltiplos</small>
+          </div>
+          <div class="form-group">
+            <label>Cliente</label>
+            <select id="gantt-filter-cliente" multiple size="4"></select>
+            <small style="color:var(--text-muted)">Ctrl+clique para múltiplos</small>
+          </div>
+          <div class="form-group">
+            <label>Local</label>
+            <select id="gantt-filter-local" multiple size="4"></select>
+            <small style="color:var(--text-muted)">Ctrl+clique para múltiplos</small>
+          </div>
+          <div class="form-group">
+            <label>Status do Equipamento</label>
+            <select id="gantt-filter-status" multiple size="4">
+              <option value="ativo">Ativo</option>
+              <option value="offline">Offline</option>
+              <option value="suspenso">Suspenso</option>
+              <option value="inativo">Inativo</option>
+            </select>
+            <small style="color:var(--text-muted)">Ctrl+clique para múltiplos</small>
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="gerarGantt()"><i class="fa-solid fa-chart-gantt"></i> Gerar Gráfico</button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="gantt-mostrar-vencidos" checked> Destacar vencidos
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="gantt-mostrar-labels" checked> Mostrar datas
+          </label>
+          <span style="font-size:12px;color:var(--text-muted)"><i class="fa-solid fa-circle-info"></i> O período é ajustado automaticamente pelos dados selecionados</span>
+        </div>
+        <input type="hidden" id="gantt-data-inicio" />
+        <input type="hidden" id="gantt-data-fim" />
+      </div>
+    </div>
+
+    <!-- LEGENDA -->
+    <div id="gantt-legenda" class="gantt-legenda hidden"></div>
+
+    <!-- ÁREA DO GRÁFICO -->
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="fa-solid fa-chart-gantt"></i> <span id="gantt-titulo">Aguardando geração...</span></h3>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-secondary" onclick="exportarGanttPNG()" id="btn-exportar-gantt" style="display:none">
+            <i class="fa-solid fa-image"></i> Exportar PNG
+          </button>
+        </div>
+      </div>
+      <div class="card-body" style="padding:0;overflow-x:auto">
+        <div id="gantt-container" style="min-height:200px;display:flex;align-items:center;justify-content:center">
+          <p class="empty-state"><i class="fa-solid fa-chart-gantt"></i>Configure os filtros e clique em "Gerar Gráfico".</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- EVENTOS -->
+  <section id="page-eventos" class="page">
+    <div class="page-header"><h1>Histórico de Eventos</h1><p>Log completo de todas as ações realizadas</p></div>
+    <div class="toolbar">
+      <input type="text" id="search-eventos" class="search-input" placeholder="Buscar por local, equipamento..." />
+      <select id="filter-tipo-evento" class="filter-select">
+        <option value="">Todos os tipos</option>
+        <option value="instalacao">Instalação</option>
+        <option value="suspensao">Suspensão</option>
+        <option value="reativacao">Reativação</option>
+        <option value="troca_equipamento">Troca de Equipamento</option>
+        <option value="cobranca">Cobrança</option>
+        <option value="renovacao">Renovação</option>
+        <option value="cancelamento">Cancelamento</option>
+        <option value="observacao">Observação</option>
+      </select>
+    </div>
+    <div class="table-responsive">
+      <table class="data-table"><thead><tr><th>Data</th><th>Local</th><th>Equipamento</th><th>Tipo</th><th>Descrição</th><th>Responsável</th></tr></thead>
+      <tbody id="tbody-eventos"></tbody></table>
+    </div>
+    <div class="pagination" id="pagination-eventos"></div>
+  </section>
+
+</main>
+
+<!-- MODAL LOCAL -->
+<div id="modal-local" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="modal-local-title">Novo Local</h2>
+      <button class="modal-close" onclick="fecharModal('modal-local')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <form id="form-local">
+        <input type="hidden" id="local-id" />
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Nome do Local *</label>
+            <input type="text" id="local-nome" required placeholder="Ex: KM36+300" />
+          </div>
+          <div class="form-group">
+            <label>Cliente *</label>
+            <select id="local-cliente" required><option value="">Selecione...</option></select>
+          </div>
+          <div class="form-group">
+            <label>Geotécnico Responsável</label>
+            <input type="text" id="local-geotecnico" placeholder="Nome do geotécnico responsável" />
+          </div>
+          <div class="form-group">
+            <label>Localização</label>
+            <input type="text" id="local-localizacao" placeholder="Ex: Ferrovia Vitória a Minas" />
+          </div>
+        </div>
+        <div class="form-group full">
+          <label>Observações</label>
+          <textarea id="local-obs" rows="3" placeholder="Observações gerais sobre o local..."></textarea>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-local')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarLocal()"><i class="fa-solid fa-save"></i> Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL INSTALAÇÃO (equipamento no local) -->
+<div id="modal-instalacao" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-inst-title">Adicionar Equipamento</h2>
+      <button class="modal-close" onclick="fecharModal('modal-instalacao')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <form id="form-inst">
+        <input type="hidden" id="inst-id" />
+        <input type="hidden" id="inst-local-id" />
+        <div class="form-group">
+          <label>Local</label>
+          <input type="text" id="inst-local-nome" disabled />
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Equipamento (Serial) *</label>
+            <div style="position:relative">
+              <input type="text" id="inst-serial-search" autocomplete="off"
+                placeholder="Digite para buscar serial ou modelo..."
+                style="width:100%;padding:9px 13px;border:1px solid var(--border-color);border-radius:8px;font-size:14px;font-family:inherit"
+                oninput="filtrarEquipSelect()" onfocus="mostrarEquipDropdown()" />
+              <input type="hidden" id="inst-serial" required />
+              <div id="inst-serial-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--border-color);border-top:none;border-radius:0 0 8px 8px;max-height:200px;overflow-y:auto;z-index:300;box-shadow:var(--shadow-md)"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Plano EWS</label>
+            <select id="inst-plano"><option value="">Nenhum vinculado</option></select>
+          </div>
+          <div class="form-group">
+            <label>Status *</label>
+            <select id="inst-status" required>
+              <option value="ativo">Ativo</option>
+              <option value="offline">Offline</option>
+              <option value="suspenso">Suspenso</option>
+              <option value="inativo">Inativo</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Valor Anuidade (R$)</label>
+            <input type="number" id="inst-anuidade" min="0" step="0.01" placeholder="Ex: 3310.00" />
+          </div>
+          <div class="form-group">
+            <label>Data de Instalação</label>
+            <input type="date" id="inst-data-instalacao" />
+          </div>
+          <div class="form-group">
+            <label>Início da Anuidade</label>
+            <input type="date" id="inst-inicio" />
+          </div>
+          <div class="form-group">
+            <label>Vencimento da Anuidade</label>
+            <input type="date" id="inst-vencimento" />
+          </div>
+          <div class="form-group">
+            <label>Data de Cobrança <small style="color:var(--text-muted);font-weight:400">(pagamento do cliente)</small></label>
+            <input type="date" id="inst-cobranca" />
+          </div>
+        </div>
+        <div class="form-group full">
+          <label>Observações</label>
+          <textarea id="inst-obs" rows="3" placeholder="Observações sobre este equipamento neste local..."></textarea>
+        </div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-instalacao')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarInstalacao()"><i class="fa-solid fa-save"></i> Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL CLIENTE -->
+<div id="modal-cliente" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="modal-cliente-title">Novo Cliente</h2>
+      <button class="modal-close" onclick="fecharModal('modal-cliente')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <form id="form-cliente">
+        <input type="hidden" id="cliente-id" />
+        <div class="form-grid">
+          <div class="form-group"><label>Nome da Empresa *</label><input type="text" id="cliente-nome" required placeholder="Ex: Vale S.A." /></div>
+          <div class="form-group"><label>Contato Responsável</label><input type="text" id="cliente-contato" placeholder="Nome do contato" /></div>
+          <div class="form-group"><label>E-mail</label><input type="email" id="cliente-email" placeholder="contato@empresa.com" /></div>
+          <div class="form-group"><label>Telefone</label><input type="text" id="cliente-telefone" placeholder="(11) 99999-9999" /></div>
+          <div class="form-group"><label>Status</label><select id="cliente-ativo"><option value="true">Ativo</option><option value="false">Inativo</option></select></div>
+        </div>
+        <div class="form-group full"><label>Observações</label><textarea id="cliente-obs" rows="3"></textarea></div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-cliente')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarCliente()"><i class="fa-solid fa-save"></i> Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL EQUIPAMENTO -->
+<div id="modal-equipamento" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="modal-equip-title">Novo Equipamento</h2>
+      <button class="modal-close" onclick="fecharModal('modal-equipamento')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <form id="form-equipamento">
+        <input type="hidden" id="equip-id" />
+        <div class="form-grid">
+          <div class="form-group"><label>Número de Série *</label><input type="text" id="equip-serial" required placeholder="Ex: EWS836" /></div>
+          <div class="form-group"><label>Tipo *</label>
+            <select id="equip-tipo" required>
+              <option value="Tiltímetro">Tiltímetro</option>
+              <option value="Datalogger">Datalogger</option>
+              <option value="Sensor">Sensor</option>
+              <option value="Outro">Outro</option>
+            </select>
+          </div>
+          <div class="form-group full"><label>Modelo</label><input type="text" id="equip-modelo" placeholder="Ex: Verde, TL-500X" /></div>
+        </div>
+        <div class="form-group full"><label>Observações</label><textarea id="equip-obs" rows="3"></textarea></div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-equipamento')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarEquipamento()"><i class="fa-solid fa-save"></i> Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL PLANO EWS -->
+<div id="modal-plano" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-plano-title">Novo Plano EWS</h2>
+      <button class="modal-close" onclick="fecharModal('modal-plano')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <form id="form-plano">
+        <input type="hidden" id="plano-id" />
+        <div class="form-grid">
+          <div class="form-group"><label>Código do Plano *</label><input type="text" id="plano-codigo" required placeholder="Ex: A22" /></div>
+          <div class="form-group"><label>Tipo do Plano</label><input type="text" id="plano-tipo" placeholder="Ex: Iridium Basic" /></div>
+          <div class="form-group"><label>Equipamento Atual (Serial)</label><select id="plano-serial"><option value="">Nenhum vinculado</option></select></div>
+          <div class="form-group"><label>Status *</label>
+            <select id="plano-status" required>
+              <option value="inativo">Inativo (não ativado)</option>
+              <option value="ativo">Ativo</option>
+              <option value="suspenso">Suspenso</option>
+              <option value="cancelado">Cancelado</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Data de Ativação</label><input type="date" id="plano-data-ativacao" /></div>
+          <div class="form-group"><label>Vencimento Anuidade EWS</label><input type="date" id="plano-data-vencimento" /></div>
+          <div class="form-group"><label>Valor Anuidade EWS (R$)</label><input type="number" id="plano-valor-anuidade" min="0" step="0.01" placeholder="Ex: 3840.00" /></div>
+        </div>
+        <div class="form-group full"><label>Observações</label><textarea id="plano-obs" rows="3" placeholder="Observações sobre este plano..."></textarea></div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-plano')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarPlano()"><i class="fa-solid fa-save"></i> Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL ATIVAR PLANO EWS -->
+<div id="modal-ativar-plano" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="modal-ativar-title">Ativar Plano EWS</h2>
+      <button class="modal-close" onclick="fecharModal('modal-ativar-plano')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="alert alert-info"><i class="fa-solid fa-circle-info"></i><span> A ativação inicia a contagem da anuidade EWS. Informe a data real de ativação junto à EWS.</span></div>
+      <input type="hidden" id="ativar-plano-id" />
+      <div class="form-group"><label>Plano</label><input type="text" id="ativar-plano-nome" disabled /></div>
+      <div class="form-grid">
+        <div class="form-group"><label>Equipamento (Serial) *</label><select id="ativar-serial" required><option value="">Selecione...</option></select></div>
+        <div class="form-group"><label>Data de Ativação *</label><input type="date" id="ativar-data" required /></div>
+        <div class="form-group"><label>Vencimento Anuidade EWS *</label><input type="date" id="ativar-vencimento" required /></div>
+        <div class="form-group"><label>Valor Anuidade EWS (R$)</label><input type="number" id="ativar-valor" min="0" step="0.01" /></div>
+      </div>
+      <div class="form-group"><label>Responsável *</label><input type="text" id="ativar-responsavel" required placeholder="Nome do responsável" /></div>
+      <div class="form-group"><label>Observações</label><textarea id="ativar-obs" rows="2"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-ativar-plano')">Cancelar</button>
+      <button class="btn btn-success" onclick="confirmarAtivacaoPlano()"><i class="fa-solid fa-play"></i> Confirmar Ativação</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL SUSPENDER/REATIVAR PLANO EWS -->
+<div id="modal-suspender-plano" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="modal-suspender-title">Suspender Plano EWS</h2>
+      <button class="modal-close" onclick="fecharModal('modal-suspender-plano')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="suspender-plano-id" />
+      <input type="hidden" id="suspender-plano-acao" />
+      <div class="form-group"><label>Plano</label><input type="text" id="suspender-plano-nome" disabled /></div>
+      <div class="form-group"><label>Data da Ação *</label><input type="date" id="suspender-plano-data" required /></div>
+      <div class="form-group"><label>Responsável *</label><input type="text" id="suspender-plano-responsavel" required placeholder="Nome do responsável" /></div>
+      <div class="form-group"><label>Motivo / Observações</label><textarea id="suspender-plano-obs" rows="3"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-suspender-plano')">Cancelar</button>
+      <button class="btn btn-warning" id="btn-confirmar-suspender-plano" onclick="confirmarSuspenderPlano()"><i class="fa-solid fa-pause"></i> Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL TRANSFERIR PLANO EWS -->
+<div id="modal-transferir-plano" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>Transferir Plano para Outro Equipamento</h2>
+      <button class="modal-close" onclick="fecharModal('modal-transferir-plano')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="alert alert-info"><i class="fa-solid fa-circle-info"></i><span> A anuidade EWS <strong>continua contando</strong> — apenas o equipamento vinculado ao plano muda. A data de vencimento não é alterada.</span></div>
+      <input type="hidden" id="transferir-plano-id" />
+      <div class="form-group"><label>Plano</label><input type="text" id="transferir-plano-nome" disabled /></div>
+      <div class="form-group"><label>Equipamento Atual (será desvinculado)</label><input type="text" id="transferir-serial-atual" disabled /></div>
+      <div class="form-group"><label>Novo Equipamento *</label><select id="transferir-serial-novo" required><option value="">Selecione...</option></select></div>
+      <div class="form-group"><label>Data da Transferência *</label><input type="date" id="transferir-data" required /></div>
+      <div class="form-group"><label>Responsável *</label><input type="text" id="transferir-responsavel" required placeholder="Nome do responsável" /></div>
+      <div class="form-group"><label>Motivo / Observações</label><textarea id="transferir-obs" rows="3"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-transferir-plano')">Cancelar</button>
+      <button class="btn btn-primary" onclick="confirmarTransferirPlano()"><i class="fa-solid fa-right-left"></i> Confirmar Transferência</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL RENOVAR ANUIDADE EWS -->
+<div id="modal-renovar-plano" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>Renovar Anuidade EWS</h2>
+      <button class="modal-close" onclick="fecharModal('modal-renovar-plano')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="renovar-plano-id" />
+      <div class="form-group"><label>Plano</label><input type="text" id="renovar-plano-nome" disabled /></div>
+      <div class="form-grid">
+        <div class="form-group"><label>Vencimento Atual</label><input type="text" id="renovar-venc-atual" disabled /></div>
+        <div class="form-group"><label>Valor Atual (R$)</label><input type="text" id="renovar-valor-atual" disabled /></div>
+        <div class="form-group"><label>Novo Vencimento *</label><input type="date" id="renovar-nova-data" required /></div>
+        <div class="form-group"><label>Novo Valor Anuidade (R$)</label><input type="number" id="renovar-novo-valor" min="0" step="0.01" /></div>
+      </div>
+      <div class="form-group"><label>Data da Renovação *</label><input type="date" id="renovar-data-acao" required /></div>
+      <div class="form-group"><label>Responsável *</label><input type="text" id="renovar-responsavel" required placeholder="Nome do responsável" /></div>
+      <div class="form-group"><label>Observações</label><textarea id="renovar-obs" rows="3"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-renovar-plano')">Cancelar</button>
+      <button class="btn btn-success" onclick="confirmarRenovarPlano()"><i class="fa-solid fa-calendar-check"></i> Confirmar Renovação</button>
+    </div>
+  </div>
+</div>
+
+
+<div id="modal-renovacao" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>Renovar Anuidade</h2>
+      <button class="modal-close" onclick="fecharModal('modal-renovacao')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="alert alert-info"><i class="fa-solid fa-circle-info"></i><span> A renovação atualiza o vencimento e registra um evento. O plano EWS e o equipamento <strong>não são alterados</strong>.</span></div>
+      <form id="form-renovacao">
+        <input type="hidden" id="renov-inst-id" />
+        <div class="form-group"><label>Local / Equipamento</label><input type="text" id="renov-ponto-nome" disabled /></div>
+        <div class="form-grid">
+          <div class="form-group"><label>Vencimento Atual</label><input type="text" id="renov-venc-atual" disabled /></div>
+          <div class="form-group"><label>Valor Atual</label><input type="text" id="renov-valor-atual" disabled /></div>
+          <div class="form-group"><label>Novo Vencimento *</label><input type="date" id="renov-nova-data" required /></div>
+          <div class="form-group"><label>Novo Valor (R$)</label><input type="number" id="renov-novo-valor" min="0" step="0.01" /></div>
+        </div>
+        <div class="form-group"><label>Responsável *</label><input type="text" id="renov-responsavel" required placeholder="Nome do responsável" /></div>
+        <div class="form-grid">
+          <div class="form-group"><label>Data da Renovação *</label><input type="date" id="renov-data-acao" required /></div>
+          <div class="form-group"><label>Data de Cobrança <small style="color:var(--text-muted);font-weight:400">(pagamento do cliente)</small></label><input type="date" id="renov-data-cobranca" /></div>
+        </div>
+        <div class="form-group"><label>Observações</label><textarea id="renov-obs" rows="3"></textarea></div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-renovacao')">Cancelar</button>
+      <button class="btn btn-success" onclick="confirmarRenovacao()"><i class="fa-solid fa-calendar-check"></i> Confirmar Renovação</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL TROCA -->
+<div id="modal-troca" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>Troca de Equipamento</h2>
+      <button class="modal-close" onclick="fecharModal('modal-troca')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="alert alert-info"><i class="fa-solid fa-circle-info"></i><span> O plano EWS permanece vinculado ao <strong>LOCAL</strong>. A anuidade <strong>não será reiniciada</strong>.</span></div>
+      <form id="form-troca">
+        <input type="hidden" id="troca-inst-id" />
+        <div class="form-group"><label>Local / Equipamento atual</label><input type="text" id="troca-ponto-nome" disabled /></div>
+        <div class="form-group"><label>Equipamento Atual (será removido)</label><input type="text" id="troca-serial-atual" disabled /></div>
+        <div class="form-group"><label>Novo Equipamento *</label>
+          <div style="position:relative">
+            <input type="text" id="troca-novo-equip-search" autocomplete="off"
+              placeholder="Digite para buscar serial ou modelo..."
+              style="width:100%;padding:9px 13px;border:1px solid var(--border-color);border-radius:8px;font-size:14px;font-family:inherit"
+              oninput="filtrarTrocaEquipSelect()" onfocus="mostrarTrocaEquipDropdown()" />
+            <input type="hidden" id="troca-novo-equip" required />
+            <div id="troca-novo-equip-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--border-color);border-top:none;border-radius:0 0 8px 8px;max-height:200px;overflow-y:auto;z-index:300;box-shadow:var(--shadow-md)"></div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label>Data da Troca *</label><input type="date" id="troca-data" required /></div>
+          <div class="form-group"><label>Responsável *</label><input type="text" id="troca-responsavel" required placeholder="Nome do técnico" /></div>
+        </div>
+        <div class="form-group"><label>Motivo / Observações</label><textarea id="troca-obs" rows="3"></textarea></div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-troca')">Cancelar</button>
+      <button class="btn btn-warning" onclick="confirmarTroca()"><i class="fa-solid fa-arrows-rotate"></i> Confirmar Troca</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL SUSPENSÃO -->
+<div id="modal-suspensao" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2 id="modal-suspensao-title">Suspender Plano EWS</h2>
+      <button class="modal-close" onclick="fecharModal('modal-suspensao')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="suspensao-ponto-id" />
+      <input type="hidden" id="suspensao-acao" />
+      <div class="form-group"><label>Local / Equipamento</label><input type="text" id="suspensao-ponto-nome" disabled /></div>
+      <div class="form-grid">
+        <div class="form-group"><label>Data da Ação *</label><input type="date" id="suspensao-data" required /></div>
+        <div class="form-group"><label>Responsável *</label><input type="text" id="suspensao-responsavel" required placeholder="Nome do responsável" /></div>
+      </div>
+      <div class="form-group"><label>Motivo / Observações</label><textarea id="suspensao-obs" rows="3"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-suspensao')">Cancelar</button>
+      <button class="btn btn-warning" id="btn-confirmar-suspensao" onclick="confirmarSuspensao()"><i class="fa-solid fa-pause"></i> Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL EVENTO MANUAL -->
+<div id="modal-evento" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <h2>Registrar Evento</h2>
+      <button class="modal-close" onclick="fecharModal('modal-evento')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <form id="form-evento">
+        <input type="hidden" id="evento-id" />
+        <div class="form-group"><label>Local *</label><select id="evento-local" required><option value="">Selecione...</option></select></div>
+        <div class="form-group"><label>Tipo de Evento *</label>
+          <select id="evento-tipo" required>
+            <option value="instalacao">Instalação</option><option value="suspensao">Suspensão</option>
+            <option value="reativacao">Reativação</option><option value="troca_equipamento">Troca de Equipamento</option>
+            <option value="renovacao">Renovação</option><option value="cancelamento">Cancelamento</option>
+            <option value="observacao">Observação</option>
+            <option value="ativacao_plano">Ativação de Plano EWS</option>
+            <option value="suspensao_plano">Suspensão de Plano EWS</option>
+            <option value="reativacao_plano">Reativação de Plano EWS</option>
+            <option value="transferencia_plano">Transferência de Plano EWS</option>
+            <option value="renovacao_plano">Renovação de Anuidade EWS</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Data *</label><input type="date" id="evento-data" required /></div>
+        <div class="form-group"><label>Responsável *</label><input type="text" id="evento-responsavel" required placeholder="Nome do responsável" /></div>
+        <div class="form-group"><label>Descrição *</label><textarea id="evento-descricao" required rows="4"></textarea></div>
+      </form>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-evento')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarEvento()"><i class="fa-solid fa-save"></i> Registrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL KPI -->
+<div id="modal-kpi" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-kpi-title">Resumo</h2>
+      <button class="modal-close" onclick="fecharModal('modal-kpi')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body">
+      <div id="modal-kpi-body"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-kpi')">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL HISTÓRICO DO EQUIPAMENTO -->
+<div id="modal-hist-equip" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h2 id="modal-hist-equip-title">Histórico do Equipamento</h2>
+        <p id="modal-hist-equip-sub" style="font-size:12px;color:var(--text-muted);margin-top:2px"></p>
+      </div>
+      <button class="modal-close" onclick="fecharModal('modal-hist-equip')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div id="modal-hist-equip-body"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-hist-equip')">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="js/db.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
