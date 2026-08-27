@@ -79,6 +79,7 @@ create table if not exists eventos (
   descricao       text,
   serial          text,
   serial_anterior text,
+  serial_novo     text,
   data_evento     date,
   responsavel     text,
   created_at      timestamptz default now()
