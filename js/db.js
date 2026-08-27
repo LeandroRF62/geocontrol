@@ -72,10 +72,22 @@ async function dbCarregar() {
   eventos       = evs || [];
 }
 
+// Chaves estrangeiras: '' precisa virar null antes de ir ao Postgres.
+// Vale para toda gravação, não só na importação — ex.: eventos de plano
+// gravam id_local:'' e id_instalacao:''.
+const _FKS = ['id_cliente', 'id_local', 'id_plano', 'id_instalacao'];
+function _normalizarFks(registro) {
+  const out = { ...registro };
+  for (const fk of _FKS) {
+    if (out[fk] === '' || out[fk] === undefined) out[fk] = null;
+  }
+  return out;
+}
+
 // ── UPSERT genérico ──────────────────────────────────────────
 async function dbUpsert(tabela, registro) {
   _checkDb();
-  const { error } = await _sb.from(tabela).upsert(registro, { onConflict: 'id' });
+  const { error } = await _sb.from(tabela).upsert(_normalizarFks(registro), { onConflict: 'id' });
   if (error) { showToast(`Erro ao salvar: ${error.message}`, 'error'); throw error; }
 }
 
@@ -152,6 +164,19 @@ const db = {
   // BATCH (para importarJSON)
   async importarTudo({ clientes: cls, equipCadastro: eqs, planos: pls, locais: lcs, instalacoes: ins, eventos: evs }) {
     _checkDb();
+
+    // O app usa '' para "sem vínculo", mas no Postgres uma chave estrangeira
+    // só aceita null. Sem esta conversão o INSERT é rejeitado com
+    // "violates foreign key constraint".
+    const FKS = ['id_cliente', 'id_local', 'id_plano', 'id_instalacao'];
+    const limpar = (registros) => (registros || []).map(r => {
+      const out = { ...r };
+      for (const fk of FKS) {
+        if (out[fk] === '' || out[fk] === undefined) out[fk] = null;
+      }
+      return out;
+    });
+
     // Apaga tudo antes de reimportar
     await _sb.from('eventos').delete().neq('id', 'noop');
     await _sb.from('instalacoes').delete().neq('id', 'noop');
@@ -164,12 +189,12 @@ const db = {
     // Sem isto, um erro (ex.: coluna inexistente) passaria despercebido
     // e a tabela ficaria vazia sem nenhum aviso.
     const passos = [
-      ['clientes',     cls],
-      ['equipamentos', eqs?.map(e => ({ id: e.id, serial: e.serial, tipo: e.tipo, modelo: e.modelo, observacoes: e.observacoes || '' }))],
-      ['planos',       pls],
-      ['locais',       lcs],
-      ['instalacoes',  ins],
-      ['eventos',      evs],
+      ['clientes',     limpar(cls)],
+      ['equipamentos', limpar(eqs).map(e => ({ id: e.id, serial: e.serial, tipo: e.tipo, modelo: e.modelo, observacoes: e.observacoes || '' }))],
+      ['planos',       limpar(pls)],
+      ['locais',       limpar(lcs)],
+      ['instalacoes',  limpar(ins)],
+      ['eventos',      limpar(evs)],
     ];
 
     for (const [tabela, registros] of passos) {
