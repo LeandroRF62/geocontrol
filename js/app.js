@@ -2132,8 +2132,114 @@ function exportarGanttPNG() {
     b.innerHTML='<i class="fa-solid fa-plus"></i> Novo Evento'; b.onclick=abrirModalEvento; tb.appendChild(b); }
 })();
 
-// ─── INIT ─────────────────────────────────────────────────────
-updateDate();
+// ═══════════════════════════════════════════════════════════
+//  AUTENTICAÇÃO
+// ═══════════════════════════════════════════════════════════
+
+function mostrarErroLogin(msg){
+  const el = document.getElementById('login-erro');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function limparErroLogin(){
+  document.getElementById('login-erro').classList.add('hidden');
+}
+
+function toggleSenhaLogin(){
+  const inp = document.getElementById('login-senha');
+  const ico = document.getElementById('icone-olho');
+  const ver = inp.type === 'password';
+  inp.type = ver ? 'text' : 'password';
+  ico.className = ver ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+}
+
+// Traduz os erros do Supabase, que vêm em inglês e pouco claros
+function traduzirErroAuth(e){
+  const m = (e?.message || '').toLowerCase();
+  if (m.includes('invalid login credentials')) return 'E-mail ou senha incorretos.';
+  if (m.includes('email not confirmed'))       return 'E-mail ainda não confirmado. Verifique sua caixa de entrada.';
+  if (m.includes('too many requests'))         return 'Muitas tentativas. Aguarde alguns minutos e tente de novo.';
+  if (m.includes('failed to fetch'))           return 'Sem conexão com o servidor. Verifique sua internet.';
+  return e?.message || 'Não foi possível entrar.';
+}
+
+async function fazerLogin(){
+  const email = document.getElementById('login-email').value.trim();
+  const senha = document.getElementById('login-senha').value;
+  const btn   = document.getElementById('btn-entrar');
+
+  limparErroLogin();
+  if(!email) return mostrarErroLogin('Informe seu e-mail.');
+  if(!senha) return mostrarErroLogin('Informe sua senha.');
+
+  btn.disabled = true;
+  btn.innerHTML = 'Entrando... <i class="fa-solid fa-circle-notch fa-spin"></i>';
+
+  try {
+    await auth.entrar(email, senha);
+    document.getElementById('login-senha').value = '';
+    await abrirApp();
+  } catch(e) {
+    console.error('[GeoControl] Falha no login:', e);
+    mostrarErroLogin(traduzirErroAuth(e));
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Entrar <i class="fa-solid fa-arrow-right"></i>';
+  }
+}
+
+async function fazerLogout(){
+  if(!confirm('Deseja sair do sistema?')) return;
+  try { await auth.sair(); } catch(e){ console.error(e); }
+  location.reload();
+}
+
+async function esqueciSenha(){
+  const email = document.getElementById('login-email').value.trim();
+  if(!email) return mostrarErroLogin('Digite seu e-mail acima e clique novamente.');
+  try {
+    await auth.redefinirSenha(email);
+    limparErroLogin();
+    alert('Se este e-mail estiver cadastrado, você receberá um link para redefinir a senha.');
+  } catch(e) {
+    mostrarErroLogin(traduzirErroAuth(e));
+  }
+}
+
+// ─── PERMISSÕES NA INTERFACE ─────────────────────────────────
+// O bloqueio real está nas políticas do banco. Isto só evita
+// mostrar botões que a pessoa não conseguiria usar.
+function aplicarPermissoes(){
+  const podeEditar  = auth.podeEditar();
+  const podeExcluir = auth.podeExcluir();
+
+  document.querySelectorAll('.btn-danger').forEach(b => {
+    if (b.getAttribute('onclick')?.match(/excluir|remover|limparDados/i))
+      b.style.display = podeExcluir ? '' : 'none';
+  });
+
+  document.querySelectorAll('[onclick]').forEach(b => {
+    const acao = b.getAttribute('onclick') || '';
+    if (/abrirModal(Local|Cliente|Equipamento|Plano|Instalacao|Evento)|importarJSON/i.test(acao))
+      b.style.display = podeEditar ? '' : 'none';
+    if (/editar[A-Z]/.test(acao))
+      b.style.display = podeEditar ? '' : 'none';
+  });
+}
+
+function preencherBoxUsuario(){
+  const u = window.usuarioAtual;
+  if(!u) return;
+  const box = document.getElementById('user-box');
+  box.style.display = 'flex';
+  document.getElementById('user-avatar').textContent = (u.nome||u.email).charAt(0);
+  document.getElementById('user-nome').textContent   = u.nome || u.email;
+  document.getElementById('user-nivel').textContent  = u.nivel;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  INICIALIZAÇÃO
+// ═══════════════════════════════════════════════════════════
 
 function mostrarErroFatal(msg){
   const div = document.createElement('div');
@@ -2143,35 +2249,43 @@ function mostrarErroFatal(msg){
   document.body.appendChild(div);
 }
 
-async function iniciarApp(){
+// Carrega os dados e mostra o app (só depois de autenticado)
+async function abrirApp(){
   try {
-    showToast('Conectando ao banco de dados...', 'warning');
+    showToast('Carregando dados...', 'warning');
     await dbCarregar();
-
-    // Banco vazio → carrega dados de exemplo
-    if(!clientes.length && !locais.length){
-      await db.importarTudo({
-        clientes:      DADOS_EXEMPLO.clientes,
-        equipCadastro: DADOS_EXEMPLO.equipamentos_cadastro,
-        planos:        DADOS_EXEMPLO.planos_aws,
-        locais:        DADOS_EXEMPLO.locais,
-        instalacoes:   DADOS_EXEMPLO.instalacoes,
-        eventos:       DADOS_EXEMPLO.eventos,
-      });
-      await dbCarregar();
-      showToast('Dados de exemplo carregados. Use "Importar" para carregar seu backup.');
-    } else {
-      showToast('Dados carregados!');
-    }
+    document.getElementById('login-screen').classList.add('hidden');
+    preencherBoxUsuario();
+    aplicarPermissoes();
+    loadPage('dashboard');
+    showToast(`Bem-vindo, ${window.usuarioAtual?.nome || ''}!`);
   } catch(e) {
-    console.error('[GeoControl] Falha na inicialização:', e);
+    console.error('[GeoControl] Falha ao carregar dados:', e);
     mostrarErroFatal(e.message || 'Erro desconhecido.');
-    showToast('Erro ao conectar ao banco.', 'error');
   }
-  loadPage('dashboard');
 }
 
-// Só inicia depois que o DOM estiver pronto
+async function iniciarApp(){
+  updateDate();
+  try {
+    // Sessão salva? Entra direto, sem pedir senha de novo.
+    const logado = await auth.sessaoAtiva();
+    if (logado) { await abrirApp(); return; }
+  } catch(e) {
+    console.error('[GeoControl] Erro ao verificar sessão:', e);
+  }
+  // Sem sessão: mostra o login
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('login-email').focus();
+}
+
+// Enter nos campos envia o formulário
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const el = document.activeElement;
+  if (el && (el.id === 'login-email' || el.id === 'login-senha')) fazerLogin();
+});
+
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', iniciarApp);
 } else {
