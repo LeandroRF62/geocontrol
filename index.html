@@ -12,6 +12,49 @@
 </head>
 <body>
 
+<!-- ══════════ TELA DE LOGIN ══════════ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-brand">
+      <div class="login-brand-icon"><i class="fa-solid fa-tower-broadcast"></i></div>
+      <img src="logo_mecroc.png" alt="MecRoc" />
+      <h2>Controle das Anuidades</h2>
+      <p>Gestão de equipamentos, locais de monitoramento e anuidades — tudo em um só lugar.</p>
+    </div>
+
+    <div class="login-form-side">
+      <h1>Bem-vindo</h1>
+      <p class="login-subtitle">Acesse sua conta para continuar</p>
+
+      <div id="login-erro" class="login-erro hidden"></div>
+
+      <div class="login-field">
+        <label for="login-email">E-mail</label>
+        <input type="email" id="login-email" placeholder="seunome@mecroc.com.br"
+               autocomplete="username" />
+      </div>
+
+      <div class="login-field">
+        <label for="login-senha">Senha</label>
+        <div class="login-pass-wrap">
+          <input type="password" id="login-senha" placeholder="••••••••"
+                 autocomplete="current-password" />
+          <button type="button" class="login-pass-toggle" onclick="toggleSenhaLogin()"
+                  title="Mostrar senha"><i class="fa-solid fa-eye" id="icone-olho"></i></button>
+        </div>
+      </div>
+
+      <button class="btn-login" id="btn-entrar" onclick="fazerLogin()">
+        Entrar <i class="fa-solid fa-arrow-right"></i>
+      </button>
+
+      <div class="login-links">
+        <a href="#" onclick="esqueciSenha();return false;">Esqueci minha senha</a>
+      </div>
+    </div>
+  </div>
+</div>
+
 <aside id="sidebar" class="sidebar">
   <div class="sidebar-brand">
     <img src="logo_mecroc.png" alt="MecRoc" style="height:36px;object-fit:contain;max-width:180px;" />
@@ -25,6 +68,16 @@
     <a href="#" class="nav-item" data-page="gantt"><i class="fa-solid fa-chart-gantt"></i> Gráfico Gantt</a>
     <a href="#" class="nav-item" data-page="eventos"><i class="fa-solid fa-clock-rotate-left"></i> Histórico</a>
   </nav>
+  <div class="user-box" id="user-box" style="display:none">
+    <div class="user-avatar" id="user-avatar">?</div>
+    <div class="user-info">
+      <div class="user-nome"  id="user-nome">—</div>
+      <div class="user-nivel" id="user-nivel">—</div>
+    </div>
+    <button class="btn-sair" onclick="fazerLogout()" title="Sair">
+      <i class="fa-solid fa-right-from-bracket"></i>
+    </button>
+  </div>
   <div class="sidebar-footer"><span>v2.0 · 2025</span></div>
 </aside>
 
