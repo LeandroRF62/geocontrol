@@ -40,6 +40,71 @@ function _checkDb(){
   if (!_sb) throw new Error('Supabase não inicializado.');
 }
 
+// ── AUTENTICAÇÃO ─────────────────────────────────────────────
+// usuarioAtual guarda { id, email, nome, nivel } depois do login.
+let usuarioAtual = null;
+
+const auth = {
+  async entrar(email, senha) {
+    _checkDb();
+    const { data, error } = await _sb.auth.signInWithPassword({ email, password: senha });
+    if (error) throw error;
+    await auth.carregarPerfil();
+    return data.user;
+  },
+
+  async sair() {
+    _checkDb();
+    await _sb.auth.signOut();
+    usuarioAtual = null;
+  },
+
+  // Busca o perfil (nome e nível) do usuário logado
+  async carregarPerfil() {
+    _checkDb();
+    const { data: { user } } = await _sb.auth.getUser();
+    if (!user) { usuarioAtual = null; return null; }
+
+    const { data: perfil, error } = await _sb
+      .from('perfis').select('*').eq('id', user.id).single();
+
+    if (error) {
+      // Sem perfil o app não sabe o que liberar; trata como visualizador.
+      console.warn('[GeoControl] Perfil não encontrado, assumindo visualizador:', error.message);
+      usuarioAtual = { id: user.id, email: user.email,
+                       nome: user.email.split('@')[0], nivel: 'visualizador' };
+    } else {
+      usuarioAtual = { id: user.id, email: user.email,
+                       nome: perfil.nome || user.email.split('@')[0],
+                       nivel: perfil.nivel || 'visualizador' };
+    }
+    window.usuarioAtual = usuarioAtual;
+    return usuarioAtual;
+  },
+
+  // Existe sessão salva? (mantém o login entre visitas)
+  async sessaoAtiva() {
+    _checkDb();
+    const { data: { session } } = await _sb.auth.getSession();
+    if (!session) return false;
+    await auth.carregarPerfil();
+    return true;
+  },
+
+  async redefinirSenha(email) {
+    _checkDb();
+    const { error } = await _sb.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname
+    });
+    if (error) throw error;
+  },
+
+  // Helpers de permissão — a checagem real também está no banco (RLS)
+  podeEditar()  { return ['admin','editor'].includes(usuarioAtual?.nivel); },
+  podeExcluir() { return usuarioAtual?.nivel === 'admin'; },
+  ehAdmin()     { return usuarioAtual?.nivel === 'admin'; },
+};
+
 // ── Estado em memória (espelho dos dados) ────────────────────
 // As variáveis globais do app.js continuam existindo.
 // db.carregar() as preenche; db.salvar() empurra mudanças.
@@ -216,7 +281,9 @@ const db = {
 // ── Exporta explicitamente no escopo global ──────────────────
 // `const` no topo de um script não vira propriedade de window,
 // então declaramos aqui para garantir que app.js enxergue tudo.
-window.db          = db;
-window.dbCarregar  = dbCarregar;
-window.dbUpsert    = dbUpsert;
-window.dbDelete    = dbDelete;
+window.db           = db;
+window.auth         = auth;
+window.dbCarregar   = dbCarregar;
+window.dbUpsert     = dbUpsert;
+window.dbDelete     = dbDelete;
+window.usuarioAtual = usuarioAtual;
